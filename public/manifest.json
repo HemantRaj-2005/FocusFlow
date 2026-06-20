@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "FocusFlow",
+  "version": "1.0.0",
+  "description": "A task-aware study enforcement system and strict accountability partner.",
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications",
+    "tabs",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "icons": {
+    "16": "favicon.svg",
+    "32": "favicon.svg",
+    "48": "favicon.svg",
+    "128": "favicon.svg"
+  },
+  "action": {
+    "default_popup": "index.html",
+    "default_title": "FocusFlow",
+    "default_icon": {
+      "16": "favicon.svg",
+      "32": "favicon.svg",
+      "48": "favicon.svg",
+      "128": "favicon.svg"
+    }
+  },
+  "options_page": "dashboard.html",
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
