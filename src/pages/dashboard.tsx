@@ -671,7 +671,7 @@ export default function Dashboard() {
     }
     setGeneratingCalendar(true);
     try {
-      const mergedEvents = await generateSmartStudyCalendar(cpGoals, calendarPrompt, calendarEvents);
+      const mergedEvents = await generateSmartStudyCalendar(cpGoals, calendarPrompt);
       setCalendarEvents(mergedEvents);
       await saveAppState({ calendarEvents: mergedEvents });
     } catch (e) {

@@ -685,16 +685,16 @@ function generateMockCoachReport(profiles: CPProfiles, goal: CPGoal): CoachRepor
  */
 export async function generateSmartStudyCalendar(
   goal: CPGoal,
-  promptText: string,
-  existingEvents: CalendarEvent[]
+  promptText: string
 ): Promise<CalendarEvent[]> {
   const apiKey = await getApiKey();
   const goalStr = goal.parsed ? JSON.stringify(goal.parsed) : 'Reach expert rating';
   const today = new Date().toISOString().split('T')[0];
 
   if (!apiKey) {
-    return generateMockCalendarSchedule(promptText, existingEvents);
+    return generateMockCalendarSchedule(promptText);
   }
+
 
   try {
     const ai = new GoogleGenAI({ apiKey });
@@ -709,31 +709,34 @@ User's goals, targets, and schedule description:
 User's parsed study goals (for topic context): ${goalStr}
 
 TASK:
-Generate a realistic, balanced, personalized weekly study schedule for the next 7 days based on EXACTLY what the user described above.
+Generate a complete, realistic, balanced, personalized weekly schedule for the next 7 days based on EXACTLY what the user described above. You must schedule the following types of events:
+1. Sleep & Rest blocks (category: "sleep", isStudySession: false) matching the sleep/wake hours the user described.
+2. College/Work blocks (category: "class", isStudySession: false) if they mention having college or work lectures. If they explicitly say they have no college/work, or do not mention college/work at all, do not schedule any.
+3. Workout/Exercise blocks (category: "exercise", isStudySession: false) matching the workout times they described.
+4. Study blocks (category: "study", isStudySession: true) covering the topics they want to study (DP, Graphs, OS, DBMS, ML, System Design, etc.) during their free hours.
 
 STRICT RULES:
-1. READ the user's prompt carefully — extract their wake time, sleep time, college/work hours, and free windows.
-2. NEVER schedule study sessions during times they said they are busy (college, work, sleep, meals).
-3. Session lengths should be REALISTIC (1 to 2.5 hours max per session). Do NOT create 5-question impossible blocks.
-4. Spread sessions across different topics they mentioned.
-5. Include short breaks between back-to-back sessions (don't schedule consecutive 3-hour blocks).
-6. Weekends can have longer or more sessions if the user hasn't restricted them.
-7. Generate 8-12 study sessions across the 7 days.
-8. Title format: "Study: <Topic> — <duration, e.g. 1.5h>"
+1. READ the user's prompt carefully — extract their wake time, sleep time, college/work hours, exercise hours, and free windows.
+2. NEVER schedule study sessions during sleep, college, or workout/exercise hours!
+3. Study session lengths should be REALISTIC (1 to 2.5 hours max per session). Spacing is important.
+4. Spread study sessions across different priority topics.
+5. Generate 8-12 study sessions across the 7 days.
+6. Title format for study sessions: "Study: <Topic> — <duration, e.g. 1.5h>"
+7. Title format for other events: "Sleep & Rest", "College Lectures" (or Work), "Workout & Jogging" (or Exercise).
 
-Output EXACTLY a JSON array of calendar event objects:
+Output EXACTLY a JSON array of calendar event objects matching this schema:
 [
   {
-    "id": "study-<unique_id>",
-    "title": "Study: <topic> — <duration>",
+    "id": "<category>-<unique_id>",
+    "title": "<event title, e.g. Sleep & Rest, College Lectures, Workout & Jogging, or Study: DP — 2h>",
     "start": "<ISO timestamp, e.g. ${today}T15:00:00.000Z>",
     "end": "<ISO timestamp>",
-    "isStudySession": true,
-    "category": "study"
+    "isStudySession": true or false,
+    "category": "study" or "sleep" or "class" or "exercise"
   }
 ]
 
-IMPORTANT: Use the local date ${today} as the start. Adjust times to be realistic based on the user's description. Output pure JSON only — no markdown, no backticks.`;
+IMPORTANT: Use the local date ${today} as the start. Adjust all times to be realistic based on the user's description. Output pure JSON only — no markdown, no backticks.`;
 
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
@@ -742,59 +745,174 @@ IMPORTANT: Use the local date ${today} as the start. Adjust times to be realisti
     });
 
     if (response.text) {
-      const newSessions = JSON.parse(response.text.trim()) as CalendarEvent[];
-      // Replace old AI study sessions with new ones, keep fixed events (sleep, class, etc.)
-      return [...existingEvents.filter(e => !e.isStudySession), ...newSessions];
+      const newEvents = JSON.parse(response.text.trim()) as CalendarEvent[];
+      return newEvents;
     }
     throw new Error('AI schedule generation failed.');
   } catch (e) {
     console.error('Gemini smart calendar scheduling failed, using smart fallback:', e);
-    return generateMockCalendarSchedule(promptText, existingEvents);
+    return generateMockCalendarSchedule(promptText);
   }
 }
+
 
 /**
  * Generate a smart fallback schedule from the prompt text when Gemini is unavailable
  */
-function generateMockCalendarSchedule(promptText: string, existingEvents: CalendarEvent[]): CalendarEvent[] {
-  const nonStudy = existingEvents.filter(e => !e.isStudySession);
+function generateMockCalendarSchedule(promptText: string): CalendarEvent[] {
   const now = new Date();
-
-  // Try to extract a free-hour window from the prompt text
   const text = promptText.toLowerCase();
-  let freeStartHour = 15; // default 3 PM
-  let freeEndHour = 18;   // default 6 PM
 
-  // Parse "free from Xpm" or "available after X"
-  const freeFromMatch = text.match(/(?:free|available|study)\s+(?:from\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
-  if (freeFromMatch) {
-    let h = parseInt(freeFromMatch[1]);
-    const ampm = freeFromMatch[3]?.toLowerCase();
-    if (ampm === 'pm' && h < 12) h += 12;
-    if (ampm === 'am' && h === 12) h = 0;
-    freeStartHour = h;
-    freeEndHour = Math.min(h + 3, 22); // 3 hours window
-  }
+  // 1. Parse Sleep hours
+  // Default sleep is 11 PM (23) to 7 AM (7)
+  let sleepStartHour = 23;
+  let sleepEndHour = 7;
 
-  // Parse "sleep at X" or "sleep by X"
-  const sleepMatch = text.match(/sleep\s+(?:at|by)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  // Let's parse "sleep at 3 AM" or "sleep at 3am" or "sleep by 3"
+  const sleepMatch = text.match(/sleep\s+(?:at|by|from)?\s*(\d{1,2})\s*(am|pm)?/i);
   if (sleepMatch) {
     let h = parseInt(sleepMatch[1]);
-    const ampm = sleepMatch[3]?.toLowerCase();
+    const ampm = sleepMatch[2]?.toLowerCase();
     if (ampm === 'pm' && h < 12) h += 12;
     if (ampm === 'am' && h === 12) h = 0;
-    freeEndHour = Math.min(h - 1, 23);
+    if (!ampm) {
+      if (h < 6) h += 0; // e.g. 3 -> 3 AM
+      else if (h >= 9 && h <= 12) h += 12; // e.g. 11 -> 11 PM
+    }
+    sleepStartHour = h;
+  }
+
+  // Let's parse "wake up at 10 AM" or "wake at 10am" or "wake up at 10"
+  const wakeMatch = text.match(/wake\s*(?:up)?\s*(?:at)?\s*(\d{1,2})\s*(am|pm)?/i);
+  if (wakeMatch) {
+    let h = parseInt(wakeMatch[1]);
+    const ampm = wakeMatch[2]?.toLowerCase();
+    if (ampm === 'pm' && h < 12) h += 12;
+    if (ampm === 'am' && h === 12) h = 0;
+    if (!ampm) {
+      if (h >= 5 && h <= 12) h += 0; // e.g. 10 -> 10 AM
+      else if (h < 5) h += 12; // e.g. 2 -> 2 PM
+    }
+    sleepEndHour = h;
+  }
+
+  // 2. Parse College / Work hours
+  const hasNoCollege = text.includes('no college') || text.includes('no work') || text.includes('no lectures') || text.includes('no class') || text.includes('free day') || text.includes('no school');
+  let collegeStartHour = 10;
+  let collegeEndHour = 14;
+  let hasCollege = !hasNoCollege;
+
+  if (hasCollege) {
+    const collegeMatch = text.match(/college\s+(?:is\s+)?(?:from\s+)?(\d{1,2})(?::\d{2})?\s*(am|pm)?\s*(?:to|–|-)\s*(\d{1,2})(?::\d{2})?\s*(am|pm)?/i);
+    if (collegeMatch) {
+      let sh = parseInt(collegeMatch[1]);
+      const sampm = collegeMatch[2]?.toLowerCase();
+      if (sampm === 'pm' && sh < 12) sh += 12;
+      if (sampm === 'am' && sh === 12) sh = 0;
+
+      let eh = parseInt(collegeMatch[3]);
+      const eampm = collegeMatch[4]?.toLowerCase();
+      if (eampm === 'pm' && eh < 12) eh += 12;
+      if (eampm === 'am' && eh === 12) eh = 0;
+
+      collegeStartHour = sh;
+      collegeEndHour = eh;
+    } else {
+      // Only schedule college if specifically mentioned (e.g. "college is", "college from")
+      hasCollege = text.includes('college') || text.includes('work') || text.includes('class') || text.includes('lecture');
+    }
+  }
+
+  // 3. Parse Exercise hours
+  // Default exercise is 6 PM (18) to 7 PM (19)
+  let exerciseStartHour = 18;
+  let exerciseEndHour = 19;
+  let hasExercise = text.includes('exercise') || text.includes('workout') || text.includes('gym') || text.includes('jogging') || text.includes('run');
+
+  if (hasExercise) {
+    const exMatch = text.match(/(?:exercise|workout|gym|run|jogging)\s+(?:is\s+)?(?:from\s+)?(\d{1,2})(?::\d{2})?\s*(am|pm)?\s*(?:to|–|-)\s*(\d{1,2})(?::\d{2})?\s*(am|pm)?/i);
+    if (exMatch) {
+      let sh = parseInt(exMatch[1]);
+      const sampm = exMatch[2]?.toLowerCase();
+      if (sampm === 'pm' && sh < 12) sh += 12;
+      if (sampm === 'am' && sh === 12) sh = 0;
+
+      let eh = parseInt(exMatch[3]);
+      const eampm = exMatch[4]?.toLowerCase();
+      if (eampm === 'pm' && eh < 12) eh += 12;
+      if (eampm === 'am' && eh === 12) eh = 0;
+
+      exerciseStartHour = sh;
+      exerciseEndHour = eh;
+    }
+  }
+
+  // Generate events for the next 7 days
+  const events: CalendarEvent[] = [];
+  for (let i = 0; i < 7; i++) {
+    const day = new Date(now);
+    day.setDate(now.getDate() + i);
+
+    // Sleep event
+    const sleepStart = new Date(day);
+    sleepStart.setHours(sleepStartHour, 0, 0, 0);
+    const sleepEnd = new Date(day);
+    if (sleepEndHour < sleepStartHour) {
+      sleepEnd.setDate(sleepEnd.getDate() + 1);
+    }
+    sleepEnd.setHours(sleepEndHour, 0, 0, 0);
+    events.push({
+      id: `sleep-${i}`,
+      title: 'Sleep & Rest',
+      start: sleepStart.toISOString(),
+      end: sleepEnd.toISOString(),
+      isStudySession: false,
+      category: 'sleep',
+    });
+
+    // College event (Mon–Fri only)
+    const dayOfWeek = day.getDay();
+    if (hasCollege && dayOfWeek >= 1 && dayOfWeek <= 5) {
+      const classStart = new Date(day);
+      classStart.setHours(collegeStartHour, 0, 0, 0);
+      const classEnd = new Date(day);
+      classEnd.setHours(collegeEndHour, 0, 0, 0);
+      events.push({
+        id: `college-${i}`,
+        title: 'College Lectures',
+        start: classStart.toISOString(),
+        end: classEnd.toISOString(),
+        isStudySession: false,
+        category: 'class',
+      });
+    }
+
+    // Exercise event
+    if (hasExercise) {
+      const exStart = new Date(day);
+      exStart.setHours(exerciseStartHour, 0, 0, 0);
+      const exEnd = new Date(day);
+      exEnd.setHours(exerciseEndHour, 0, 0, 0);
+      events.push({
+        id: `ex-${i}`,
+        title: 'Workout & Jogging',
+        start: exStart.toISOString(),
+        end: exEnd.toISOString(),
+        isStudySession: false,
+        category: 'exercise',
+      });
+    }
   }
 
   // Extract topic hints from prompt
   const topicHints: string[] = [];
   const topicKeywords: [string, string][] = [
-    ['graph', 'Graph Theory & BFS/DFS'],
+    ['graph', 'Graphs & BFS/DFS'],
     ['dp', 'Dynamic Programming'],
     ['dynamic programming', 'Dynamic Programming'],
-    ['tree', 'Trees & Binary Trees'],
+    ['tree', 'Trees & BSTs'],
     ['binary search', 'Binary Search'],
-    ['greedy', 'Greedy Algorithms'],
+    ['greedy', 'Greedy Algos'],
     ['os', 'Operating Systems'],
     ['operating system', 'Operating Systems'],
     ['dbms', 'DBMS & SQL'],
@@ -806,57 +924,117 @@ function generateMockCalendarSchedule(promptText: string, existingEvents: Calend
     ['network', 'Computer Networks'],
     ['math', 'Number Theory & Math'],
     ['segment tree', 'Segment Trees'],
-    ['contest', 'Contest Practice & Upsolving'],
+    ['contest', 'Contest Practice'],
   ];
   for (const [kw, label] of topicKeywords) {
     if (text.includes(kw) && !topicHints.includes(label)) topicHints.push(label);
   }
   if (topicHints.length === 0) {
-    topicHints.push('Graph Theory & BFS/DFS', 'Dynamic Programming', 'Binary Search', 'Greedy Algorithms', 'Contest Practice');
+    topicHints.push('Graphs & BFS/DFS', 'Dynamic Programming', 'Binary Search', 'Greedy Algos', 'System Design');
   }
 
-  // Session durations — 1 to 2 hours
-  const durations = [60, 90, 90, 120, 60, 90, 90, 60, 120, 90];
-  const studySessions: CalendarEvent[] = [];
   let topicIdx = 0;
+  const studySessions: CalendarEvent[] = [];
 
-  for (let i = 0; i < 7 && studySessions.length < 10; i++) {
+  for (let i = 0; i < 7 && studySessions.length < 12; i++) {
     const day = new Date(now);
     day.setDate(now.getDate() + i);
-    const isWeekend = day.getDay() === 0 || day.getDay() === 6;
+    const dayOfWeek = day.getDay();
 
-    // Weekdays: 1 session; Weekends: 2 sessions
-    const sessionsForDay = isWeekend ? 2 : 1;
-    let slotStart = freeStartHour;
+    // Determine the hourly schedule of the day (24 hours)
+    // 0 = free, 1 = busy (sleep/college/exercise)
+    const daySchedule = new Array(24).fill(0);
 
-    for (let s = 0; s < sessionsForDay && studySessions.length < 10; s++) {
-      const durationMins = durations[studySessions.length % durations.length];
-      const endHour = slotStart + durationMins / 60;
-      if (endHour > freeEndHour) break;
+    // Mark Sleep hours
+    for (let h = 0; h < 24; h++) {
+      if (sleepStartHour > sleepEndHour) {
+        if (h >= sleepStartHour || h < sleepEndHour) daySchedule[h] = 1;
+      } else {
+        if (h >= sleepStartHour && h < sleepEndHour) daySchedule[h] = 1;
+      }
+    }
 
-      const start = new Date(day);
-      start.setHours(slotStart, 0, 0, 0);
-      const end = new Date(day);
-      end.setHours(Math.floor(slotStart + durationMins / 60), (durationMins % 60), 0, 0);
+    // Mark College hours
+    if (hasCollege && dayOfWeek >= 1 && dayOfWeek <= 5) {
+      for (let h = collegeStartHour; h < collegeEndHour; h++) {
+        if (h >= 0 && h < 24) daySchedule[h] = 1;
+      }
+    }
 
-      const topic = topicHints[topicIdx % topicHints.length];
-      const durationLabel = durationMins >= 60 ? `${durationMins / 60}h` : `${durationMins}m`;
+    // Mark Exercise hours
+    if (hasExercise) {
+      for (let h = exerciseStartHour; h < exerciseEndHour; h++) {
+        if (h >= 0 && h < 24) daySchedule[h] = 1;
+      }
+    }
 
-      studySessions.push({
-        id: `study-auto-${i}-${s}`,
-        title: `Study: ${topic} — ${durationLabel}`,
-        start: start.toISOString(),
-        end: end.toISOString(),
-        isStudySession: true,
-        category: 'study',
-      });
+    // Schedule study blocks of 1.5 to 2 hours
+    let currentHour = sleepEndHour;
+    let sessionsScheduledToday = 0;
+    const maxSessionsPerDay = (dayOfWeek === 0 || dayOfWeek === 6) ? 3 : 2;
 
-      topicIdx++;
-      slotStart = endHour + 0.5; // 30 min gap between sessions
+    while (sessionsScheduledToday < maxSessionsPerDay) {
+      // Find the next free hour
+      let startOfBlock = -1;
+      for (let offset = 0; offset < 24; offset++) {
+        const h = (currentHour + offset) % 24;
+        if (h === sleepStartHour) break;
+        if (daySchedule[h] === 0) {
+          startOfBlock = h;
+          break;
+        }
+      }
+
+      if (startOfBlock === -1) break;
+
+      // See how long this free block is
+      let blockLen = 0;
+      for (let len = 0; len < 5; len++) {
+        const h = (startOfBlock + len) % 24;
+        if (h === sleepStartHour || daySchedule[h] === 1) break;
+        blockLen++;
+      }
+
+      if (blockLen >= 1.5) {
+        const durationMins = blockLen >= 2 ? 120 : 90;
+        const start = new Date(day);
+        start.setHours(startOfBlock, 0, 0, 0);
+
+        const end = new Date(day);
+        const endHour = (startOfBlock + durationMins / 60) % 24;
+        if (endHour < startOfBlock) {
+          end.setDate(end.getDate() + 1);
+        }
+        end.setHours(Math.floor(startOfBlock + durationMins / 60), (durationMins % 60), 0, 0);
+
+        const topic = topicHints[topicIdx % topicHints.length];
+        const durationLabel = durationMins >= 60 ? `${durationMins / 60}h` : `${durationMins}m`;
+
+        studySessions.push({
+          id: `study-auto-${i}-${sessionsScheduledToday}`,
+          title: `Study: ${topic} — ${durationLabel}`,
+          start: start.toISOString(),
+          end: end.toISOString(),
+          isStudySession: true,
+          category: 'study',
+        });
+
+        topicIdx++;
+        sessionsScheduledToday++;
+
+        // Mark hours as busy
+        const hoursToMark = Math.ceil(durationMins / 60);
+        for (let m = 0; m < hoursToMark; m++) {
+          daySchedule[(startOfBlock + m) % 24] = 1;
+        }
+        currentHour = (startOfBlock + hoursToMark + 1) % 24;
+      } else {
+        currentHour = (startOfBlock + 1) % 24;
+      }
     }
   }
 
-  return [...nonStudy, ...studySessions];
+  return [...events, ...studySessions];
 }
 
 /**
