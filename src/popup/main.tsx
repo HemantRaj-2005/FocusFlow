@@ -1,10 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
-import { Schedule, BreakState } from '../types';
-import { getAppState, subscribeToKey } from '../storage/chromeStorage';
+import { Schedule, BreakState, CPProfiles, CoachReport } from '../types';
+import { getAppState, saveAppState, subscribeToKey } from '../storage/chromeStorage';
 import { getCurrentTask, getRemainingSeconds, formatRemainingTime } from '../utils/time';
-import { Zap, BookOpen, Coffee, Settings, Timer, CheckCircle2, Award, ExternalLink } from 'lucide-react';
+import { Zap, BookOpen, Coffee, Settings, Timer, CheckCircle2, Award, ExternalLink, Brain, RefreshCw } from 'lucide-react';
+import { syncCodeforces, syncLeetCode, syncAtCoder, generateCPCoachReport } from '../services/cpCoach';
 import '../index.css';
+
+// Mock contests matching background worker
+const MOCK_UPCOMING_CONTESTS = [
+  { name: "Codeforces Round #960 (Div. 2)", startTime: Date.now() + 25 * 60 * 1000, platform: "Codeforces" },
+  { name: "LeetCode Biweekly Contest 134", startTime: Date.now() + 15 * 3600 * 1000, platform: "LeetCode" },
+  { name: "AtCoder Beginner Contest 360", startTime: Date.now() + 32 * 3600 * 1000, platform: "AtCoder" }
+];
 
 const Popup: React.FC = () => {
   const [activeTask, setActiveTask] = useState<Schedule | null>(null);
@@ -15,11 +23,27 @@ const Popup: React.FC = () => {
   const [focusScore, setFocusScore] = useState<number>(100);
   const [loading, setLoading] = useState<boolean>(false);
 
+  // CP states inside popup
+  const [cpProfiles, setCpProfiles] = useState<CPProfiles>({
+    codeforcesHandle: '',
+    leetcodeUsername: '',
+    atcoderUsername: '',
+    lastSyncTime: 0,
+    codeforces: null,
+    leetcode: null,
+    atcoder: null,
+  });
+  const [coachReport, setCoachReport] = useState<CoachReport | null>(null);
+  const [nearestContest, setNearestContest] = useState<any>(null);
+  const [syncing, setSyncing] = useState<boolean>(false);
+
   // Load initial data
   useEffect(() => {
     async function loadData() {
       const state = await getAppState();
       setBreakState(state.breakState);
+      setCpProfiles(state.cpProfiles);
+      setCoachReport(state.coachReport);
       
       const currentTask = getCurrentTask(state.schedules);
       setActiveTask(currentTask);
@@ -33,11 +57,18 @@ const Popup: React.FC = () => {
       const todayStr = new Date().toISOString().split('T')[0];
       const todayScore = state.analytics.focusScoreHistory.find(e => e.date === todayStr)?.score ?? 100;
       setFocusScore(todayScore);
+
+      // Find nearest upcoming contest
+      const now = Date.now();
+      const nextC = MOCK_UPCOMING_CONTESTS.find(c => c.startTime > now);
+      if (nextC) {
+        setNearestContest(nextC);
+      }
     }
     loadData();
   }, []);
 
-  // Subscribe to changes in schedules, break state, and analytics
+  // Subscribe to changes in schedules, break state, analytics, profiles, and coach reports
   useEffect(() => {
     const unsubBreak = subscribeToKey<BreakState>('breakState', (newValue) => {
       setBreakState(newValue);
@@ -53,9 +84,19 @@ const Popup: React.FC = () => {
       }
     });
 
+    const unsubProfiles = subscribeToKey<CPProfiles>('cpProfiles', (profiles) => {
+      setCpProfiles(profiles);
+    });
+
+    const unsubReport = subscribeToKey<CoachReport | null>('coachReport', (report) => {
+      setCoachReport(report);
+    });
+
     return () => {
       unsubBreak();
       unsubSchedules();
+      unsubProfiles();
+      unsubReport();
     };
   }, []);
 
@@ -118,6 +159,42 @@ const Popup: React.FC = () => {
     });
   };
 
+  // Quick manual sync trigger
+  const handleQuickSync = async () => {
+    setSyncing(true);
+    try {
+      const state = await getAppState();
+      const cfHandle = state.cpProfiles.codeforcesHandle;
+      const lcUser = state.cpProfiles.leetcodeUsername;
+      const acUser = state.cpProfiles.atcoderUsername;
+
+      const cfData = cfHandle ? await syncCodeforces(cfHandle) : null;
+      const lcData = lcUser ? await syncLeetCode(lcUser) : null;
+      const acData = acUser ? await syncAtCoder(acUser) : null;
+
+      const updatedProfiles: CPProfiles = {
+        codeforcesHandle: cfHandle,
+        leetcodeUsername: lcUser,
+        atcoderUsername: acUser,
+        lastSyncTime: Date.now(),
+        codeforces: cfData,
+        leetcode: lcData,
+        atcoder: acData,
+      };
+
+      setCpProfiles(updatedProfiles);
+      await saveAppState({ cpProfiles: updatedProfiles });
+
+      const report = await generateCPCoachReport(updatedProfiles, state.cpGoals, state.studyNotes);
+      setCoachReport(report);
+      await saveAppState({ coachReport: report });
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const openDashboard = () => {
     if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.openOptionsPage) {
       chrome.runtime.openOptionsPage();
@@ -126,8 +203,25 @@ const Popup: React.FC = () => {
     }
   };
 
+  // Compute Daily practice progress ratio
+  const getPracticeProgress = () => {
+    if (!coachReport || !coachReport.dailyPractice) return null;
+    const dp = coachReport.dailyPractice;
+    const items = [
+      ...dp.warmup,
+      ...dp.core,
+      dp.challenge,
+      dp.revision
+    ];
+    const solved = items.filter(i => i.solved).length;
+    return { solved, total: items.length };
+  };
+
+  const practiceProg = getPracticeProgress();
+  const hasLinkedProfiles = cpProfiles.codeforcesHandle || cpProfiles.leetcodeUsername || cpProfiles.atcoderUsername;
+
   return (
-    <div className="w-[380px] min-h-[480px] bg-slate-950 text-slate-100 flex flex-col relative overflow-hidden bg-mesh">
+    <div className="w-[380px] min-h-[520px] bg-slate-950 text-slate-100 flex flex-col relative overflow-hidden bg-mesh">
       {/* Header */}
       <header className="flex items-center justify-between px-5 py-4 border-b border-white/5 bg-slate-900/40 backdrop-blur-md">
         <div className="flex items-center gap-2">
@@ -136,7 +230,7 @@ const Popup: React.FC = () => {
           </div>
           <div>
             <h1 className="text-sm font-bold tracking-tight text-white">FocusFlow</h1>
-            <span className="text-[10px] text-slate-400 font-medium">Study Accountability</span>
+            <span className="text-[10px] text-pink-400 font-semibold uppercase tracking-wider">CP Coach Engine</span>
           </div>
         </div>
 
@@ -150,7 +244,7 @@ const Popup: React.FC = () => {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 p-5 flex flex-col gap-4.5 overflow-y-auto">
+      <main className="flex-1 p-5 flex flex-col gap-4 overflow-y-auto">
         {/* Break State Active */}
         {breakState.inBreak ? (
           <div className="glass rounded-xl p-5 border border-indigo-500/20 text-center animate-slide-up relative">
@@ -230,14 +324,14 @@ const Popup: React.FC = () => {
           </div>
         ) : (
           /* No Active Task Scheduled */
-          <div className="glass rounded-xl p-6 border border-white/5 text-center flex flex-col items-center gap-3.5 animate-slide-up">
+          <div className="glass rounded-xl p-5 border border-white/5 text-center flex flex-col items-center gap-3.5 animate-slide-up">
             <div className="p-3 bg-indigo-500/10 rounded-full border border-indigo-500/25">
               <Timer className="h-6 w-6 text-indigo-400" />
             </div>
             <div>
               <h3 className="text-sm font-bold text-white">No Active Task Scheduled</h3>
               <p className="text-xs text-slate-400 mt-1 max-w-[240px] mx-auto leading-relaxed">
-                Take command of your productivity. Create a study timeline on the FocusFlow planner dashboard.
+                Start study timeline or sync study blocks from Smart Calendar Planner.
               </p>
             </div>
             <button
@@ -249,6 +343,59 @@ const Popup: React.FC = () => {
             </button>
           </div>
         )}
+
+        {/* CP Coach Overview Panel */}
+        <div className="glass rounded-xl p-4.5 border border-white/5 flex flex-col gap-3.5 text-left text-xs animate-slide-up">
+          <div className="flex justify-between items-center">
+            <span className="flex items-center gap-1 text-[10px] text-pink-400 uppercase font-bold tracking-wider">
+              <Brain className="h-3.5 w-3.5" />
+              CP Coach Assistant
+            </span>
+            {hasLinkedProfiles && (
+              <button
+                onClick={handleQuickSync}
+                disabled={syncing}
+                className="text-[10px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1 disabled:opacity-40"
+              >
+                <RefreshCw className={`h-3 w-3 ${syncing ? 'animate-spin' : ''}`} />
+                {syncing ? 'Syncing...' : 'Sync'}
+              </button>
+            )}
+          </div>
+
+          {hasLinkedProfiles ? (
+            <div className="flex flex-col gap-2.5">
+              {/* Daily Practice progress indicator */}
+              {practiceProg ? (
+                <div className="flex justify-between items-center p-2 bg-slate-900/50 rounded-lg border border-white/5">
+                  <span className="text-slate-300">Daily Practice sheet:</span>
+                  <strong className="text-emerald-400 font-mono">{practiceProg.solved} / {practiceProg.total} Solved</strong>
+                </div>
+              ) : (
+                <div className="text-[10px] text-slate-400">Syncing profiles to compile daily worksheets...</div>
+              )}
+
+              {/* Upcoming Contest reminder */}
+              {nearestContest ? (
+                <div className="flex justify-between items-center p-2 bg-slate-900/50 rounded-lg border border-white/5">
+                  <div>
+                    <span className="text-[8px] bg-red-500/15 text-red-300 px-1 py-0.5 rounded font-bold uppercase mr-1">{nearestContest.platform}</span>
+                    <span className="text-slate-300 font-semibold">{nearestContest.name.substring(0, 18)}...</span>
+                  </div>
+                  <strong className="text-indigo-400 font-mono text-[10px]">
+                    {Math.round((nearestContest.startTime - Date.now()) / (60 * 1000))}m
+                  </strong>
+                </div>
+              ) : (
+                <div className="text-[10px] text-slate-500 text-center">No upcoming contests scheduled.</div>
+              )}
+            </div>
+          ) : (
+            <div className="text-[10px] text-slate-400 leading-relaxed">
+              Link your Codeforces / LeetCode / AtCoder handles in settings to generate daily CP worksheets and track contest countdowns.
+            </div>
+          )}
+        </div>
 
         {/* Stats Summary Widgets */}
         <div className="grid grid-cols-2 gap-3.5">

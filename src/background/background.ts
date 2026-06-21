@@ -2,6 +2,7 @@ import { Schedule, BreakState, OffenseState } from '../types';
 import { getAppState, saveAppState, getStorageItem } from '../storage/chromeStorage';
 import { getCurrentTask, getRemainingSeconds, formatRemainingTime } from '../utils/time';
 import { RuleBasedAnalyzer, AIAnalyzer } from '../services/analyzer';
+import { syncCodeforces, syncLeetCode, syncAtCoder } from '../services/cpCoach';
 
 const ruleAnalyzer = new RuleBasedAnalyzer();
 const aiAnalyzer = new AIAnalyzer();
@@ -271,6 +272,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // Listener for alarms
+let notifiedContests: string[] = [];
+let lastAccountabilityCheckTime = 0;
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'break-alarm') {
     const freshBreakState: BreakState = { inBreak: false, breakEndTime: 0 };
@@ -289,6 +293,9 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'focus-tracker') {
     // 1-minute tick: Accumulate focus hours if user is actively focused on their study
     trackFocusHourMinute();
+    checkUpcomingContestsReminders();
+    checkAccountabilityMessages();
+    runProfileAutoSync();
   }
 });
 
@@ -368,13 +375,7 @@ async function accumulateFocusTime(hours: number) {
 
   // Update focus score history
   // Focus Score = Max(0, 100 - (attempts * 5) - (redirects * 15)) but based on performance
-  // Let's compute a simple focus score for today
   const todayEntryIdx = analytics.focusScoreHistory.findIndex(entry => entry.date === todayStr);
-  
-  // Calculate today's focus score:
-  // Starts at 100, decays with distraction attempts and redirects, but scales with focus hours.
-  // Formula: Math.max(10, Math.min(100, Math.round(100 - (analytics.distractionAttempts * 2) - (analytics.redirectCount * 8) + (analytics.focusHours * 10))))
-  // Let's make it a sensible score between 0 and 100
   const scoreRaw = 100 - (analytics.distractionAttempts * 3) - (analytics.redirectCount * 10);
   const score = Math.max(10, Math.min(100, Math.round(scoreRaw)));
 
@@ -390,3 +391,121 @@ async function accumulateFocusTime(hours: number) {
 
   await saveAppState({ analytics });
 }
+
+const MOCK_UPCOMING_CONTESTS = [
+  { name: "Codeforces Round #960 (Div. 2)", startTime: Date.now() + 25 * 60 * 1000, platform: "Codeforces" }, // in 25 mins
+  { name: "LeetCode Biweekly Contest 134", startTime: Date.now() + 15 * 3600 * 1000, platform: "LeetCode" },
+  { name: "AtCoder Beginner Contest 360", startTime: Date.now() + 32 * 3600 * 1000, platform: "AtCoder" }
+];
+
+async function checkUpcomingContestsReminders() {
+  const now = Date.now();
+  let contests = MOCK_UPCOMING_CONTESTS;
+  
+  // Try to fetch CF contest list directly
+  try {
+    const res = await fetch('https://codeforces.com/api/contest.list?gym=false');
+    const data = await res.json();
+    if (data.status === 'OK') {
+      const upcoming = data.result
+        .filter((c: any) => c.phase === 'BEFORE' && c.relativeTimeSeconds >= -1800 && c.relativeTimeSeconds < 0)
+        .map((c: any) => ({
+          name: c.name,
+          startTime: now + (Math.abs(c.relativeTimeSeconds) * 1000),
+          platform: 'Codeforces'
+        }));
+      if (upcoming.length > 0) {
+        contests = [...upcoming, ...MOCK_UPCOMING_CONTESTS.filter(mc => mc.platform !== 'Codeforces')];
+      }
+    }
+  } catch (e) {
+    // Ignore error
+  }
+
+  for (const c of contests) {
+    const diffMins = (c.startTime - now) / (60 * 1000);
+    // If starting in less than 30 minutes and we haven't notified yet
+    if (diffMins > 0 && diffMins <= 30 && !notifiedContests.includes(c.name)) {
+      notifiedContests.push(c.name);
+      
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: 'assets/icon-128.png',
+        title: `Upcoming Contest on ${c.platform}!`,
+        message: `"${c.name}" starts in ${Math.round(diffMins)} minutes! Prepare your workspace.`,
+        priority: 2,
+        requireInteraction: true
+      });
+    }
+  }
+}
+
+async function checkAccountabilityMessages() {
+  const now = Date.now();
+  // Check at most once every 15 minutes to avoid spamming the user
+  if (now - lastAccountabilityCheckTime < 15 * 60 * 1000) return;
+  lastAccountabilityCheckTime = now;
+
+  const state = await getAppState();
+  const score = state.analytics.focusScoreHistory.find(e => e.date === new Date().toISOString().split('T')[0])?.score ?? 100;
+  
+  if (score < 75 && state.analytics.distractionAttempts > 5) {
+    const messages = [
+      "You planned to master CP, but distraction intercepts are mounting. Stay focused!",
+      `Your focus score is down to ${score}%. You are falling behind your targets.`,
+      "FocusFlow Alert: Multiple distractions blocked. Let's return to the study roadmap!",
+      "Your study sheet for today is waiting. Take command of your placement prep now."
+    ];
+    const msg = messages[Math.floor(Math.random() * messages.length)];
+    
+    chrome.notifications.create({
+      type: 'basic',
+      iconUrl: 'assets/icon-128.png',
+      title: 'Coach Accountability Nudge ⚡',
+      message: msg,
+      priority: 1
+    });
+  }
+}
+
+async function runProfileAutoSync() {
+  const state = await getAppState();
+  const profiles = state.cpProfiles;
+  
+  let changed = false;
+  const now = Date.now();
+  
+  // Throttle auto-sync to once every 12 hours
+  if (now - profiles.lastSyncTime > 12 * 3600 * 1000) {
+    console.log('Running background auto-sync of CP profiles...');
+    
+    if (profiles.codeforcesHandle) {
+      try {
+        const cfData = await syncCodeforces(profiles.codeforcesHandle);
+        profiles.codeforces = cfData;
+        changed = true;
+      } catch (e) { console.error('CF auto sync fail:', e); }
+    }
+    if (profiles.leetcodeUsername) {
+      try {
+        const lcData = await syncLeetCode(profiles.leetcodeUsername);
+        profiles.leetcode = lcData;
+        changed = true;
+      } catch (e) { console.error('LC auto sync fail:', e); }
+    }
+    if (profiles.atcoderUsername) {
+      try {
+        const acData = await syncAtCoder(profiles.atcoderUsername);
+        profiles.atcoder = acData;
+        changed = true;
+      } catch (e) { console.error('AC auto sync fail:', e); }
+    }
+    
+    if (changed || profiles.lastSyncTime === 0) {
+      profiles.lastSyncTime = now;
+      await saveAppState({ cpProfiles: profiles });
+      console.log('Background auto-sync complete!');
+    }
+  }
+}
+
