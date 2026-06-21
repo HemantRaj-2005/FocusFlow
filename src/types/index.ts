@@ -184,3 +184,12 @@ export interface CoachReport {
   }[];
   predictedConfidence: number;
 }
+
+export interface UpcomingContest {
+  name: string;
+  startTime: number; // Unix ms
+  url: string;
+  platform: 'Codeforces' | 'LeetCode' | 'AtCoder';
+  durationSeconds: number;
+}
+

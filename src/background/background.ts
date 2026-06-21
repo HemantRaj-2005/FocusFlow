@@ -2,7 +2,8 @@ import { Schedule, BreakState, OffenseState } from '../types';
 import { getAppState, saveAppState, getStorageItem } from '../storage/chromeStorage';
 import { getCurrentTask, getRemainingSeconds, formatRemainingTime } from '../utils/time';
 import { RuleBasedAnalyzer, AIAnalyzer } from '../services/analyzer';
-import { syncCodeforces, syncLeetCode, syncAtCoder } from '../services/cpCoach';
+import { syncCodeforces, syncLeetCode, syncAtCoder, fetchUpcomingContests } from '../services/cpCoach';
+
 
 const ruleAnalyzer = new RuleBasedAnalyzer();
 const aiAnalyzer = new AIAnalyzer();
@@ -392,51 +393,29 @@ async function accumulateFocusTime(hours: number) {
   await saveAppState({ analytics });
 }
 
-const MOCK_UPCOMING_CONTESTS = [
-  { name: "Codeforces Round #960 (Div. 2)", startTime: Date.now() + 25 * 60 * 1000, platform: "Codeforces" }, // in 25 mins
-  { name: "LeetCode Biweekly Contest 134", startTime: Date.now() + 15 * 3600 * 1000, platform: "LeetCode" },
-  { name: "AtCoder Beginner Contest 360", startTime: Date.now() + 32 * 3600 * 1000, platform: "AtCoder" }
-];
-
 async function checkUpcomingContestsReminders() {
-  const now = Date.now();
-  let contests = MOCK_UPCOMING_CONTESTS;
-  
-  // Try to fetch CF contest list directly
   try {
-    const res = await fetch('https://codeforces.com/api/contest.list?gym=false');
-    const data = await res.json();
-    if (data.status === 'OK') {
-      const upcoming = data.result
-        .filter((c: any) => c.phase === 'BEFORE' && c.relativeTimeSeconds >= -1800 && c.relativeTimeSeconds < 0)
-        .map((c: any) => ({
-          name: c.name,
-          startTime: now + (Math.abs(c.relativeTimeSeconds) * 1000),
-          platform: 'Codeforces'
-        }));
-      if (upcoming.length > 0) {
-        contests = [...upcoming, ...MOCK_UPCOMING_CONTESTS.filter(mc => mc.platform !== 'Codeforces')];
+    const contests = await fetchUpcomingContests();
+    const now = Date.now();
+
+    for (const c of contests) {
+      const diffMins = (c.startTime - now) / (60 * 1000);
+      // If starting in less than 30 minutes and we haven't notified yet
+      if (diffMins > 0 && diffMins <= 30 && !notifiedContests.includes(c.name)) {
+        notifiedContests.push(c.name);
+        
+        chrome.notifications.create({
+          type: 'basic',
+          iconUrl: 'assets/icon-128.png',
+          title: `Upcoming Contest on ${c.platform}!`,
+          message: `"${c.name}" starts in ${Math.round(diffMins)} minutes! Prepare your workspace.`,
+          priority: 2,
+          requireInteraction: true
+        });
       }
     }
   } catch (e) {
-    // Ignore error
-  }
-
-  for (const c of contests) {
-    const diffMins = (c.startTime - now) / (60 * 1000);
-    // If starting in less than 30 minutes and we haven't notified yet
-    if (diffMins > 0 && diffMins <= 30 && !notifiedContests.includes(c.name)) {
-      notifiedContests.push(c.name);
-      
-      chrome.notifications.create({
-        type: 'basic',
-        iconUrl: 'assets/icon-128.png',
-        title: `Upcoming Contest on ${c.platform}!`,
-        message: `"${c.name}" starts in ${Math.round(diffMins)} minutes! Prepare your workspace.`,
-        priority: 2,
-        requireInteraction: true
-      });
-    }
+    console.error('Failed to run contest reminders background check:', e);
   }
 }
 

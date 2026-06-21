@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
-import { CPProfiles, CPGoal, StudyNote, CalendarEvent, CoachReport, Schedule } from '../types';
+import { CPProfiles, CPGoal, StudyNote, CalendarEvent, CoachReport, Schedule, UpcomingContest } from '../types';
 
 const DEFAULT_GEMINI_KEY = (import.meta.env.VITE_GEMINI_API_KEY as string) || '';
 
@@ -685,47 +685,55 @@ function generateMockCoachReport(profiles: CPProfiles, goal: CPGoal): CoachRepor
  */
 export async function generateSmartStudyCalendar(
   goal: CPGoal,
-  availability: { sleepStart: string; sleepEnd: string; workStart: string; workEnd: string },
+  promptText: string,
   existingEvents: CalendarEvent[]
 ): Promise<CalendarEvent[]> {
   const apiKey = await getApiKey();
   const goalStr = goal.parsed ? JSON.stringify(goal.parsed) : 'Reach expert rating';
-  const existingStr = JSON.stringify(existingEvents.slice(0, 20)); // Limit payload size
+  const today = new Date().toISOString().split('T')[0];
 
   if (!apiKey) {
-    return generateMockCalendarSchedule(existingEvents);
+    return generateMockCalendarSchedule(promptText, existingEvents);
   }
 
   try {
     const ai = new GoogleGenAI({ apiKey });
-    
-    const prompt = `You are an AI Smart Calendar Scheduler. 
-    User CP Goals: ${goalStr}
-    Availability limitations:
-    - Sleep Schedule: ${availability.sleepStart} to ${availability.sleepEnd} daily
-    - College/Work Hours: ${availability.workStart} to ${availability.workEnd} on weekdays (Monday-Friday)
-    
-    Current Calendar Events to avoid clashes:
-    ${existingStr}
-    
-    Generate 6-8 new high-priority Study Session calendar blocks for the next 7 days (starting today 2026-06-22).
-    - Study sessions should focus on priority topics (DP, Graphs, Trees, greedy) or upsold contest reviews.
-    - Each block should be 1.5 to 2.5 hours long.
-    - NEVER schedule study sessions during sleep or college hours, or during existing calendar events!
-    - Ensure a healthy balance (avoid burnout).
-    
-    Output EXACTLY a JSON list of objects matching this schema:
-    [
-      {
-        "id": "study-session-<unique_id>",
-        "title": "Study: <topic name> or <session name>",
-        "start": "<ISO timestamp>",
-        "end": "<ISO timestamp>",
-        "isStudySession": true,
-        "category": "study"
-      }
-    ]
-    DO NOT output code block backticks, output pure JSON.`;
+
+    const prompt = `You are an AI Smart Study Planner and Calendar Scheduler.
+
+Today's date: ${today} (use this as Day 1 of the 7-day schedule)
+
+User's goals, targets, and schedule description:
+"${promptText}"
+
+User's parsed study goals (for topic context): ${goalStr}
+
+TASK:
+Generate a realistic, balanced, personalized weekly study schedule for the next 7 days based on EXACTLY what the user described above.
+
+STRICT RULES:
+1. READ the user's prompt carefully — extract their wake time, sleep time, college/work hours, and free windows.
+2. NEVER schedule study sessions during times they said they are busy (college, work, sleep, meals).
+3. Session lengths should be REALISTIC (1 to 2.5 hours max per session). Do NOT create 5-question impossible blocks.
+4. Spread sessions across different topics they mentioned.
+5. Include short breaks between back-to-back sessions (don't schedule consecutive 3-hour blocks).
+6. Weekends can have longer or more sessions if the user hasn't restricted them.
+7. Generate 8-12 study sessions across the 7 days.
+8. Title format: "Study: <Topic> — <duration, e.g. 1.5h>"
+
+Output EXACTLY a JSON array of calendar event objects:
+[
+  {
+    "id": "study-<unique_id>",
+    "title": "Study: <topic> — <duration>",
+    "start": "<ISO timestamp, e.g. ${today}T15:00:00.000Z>",
+    "end": "<ISO timestamp>",
+    "isStudySession": true,
+    "category": "study"
+  }
+]
+
+IMPORTANT: Use the local date ${today} as the start. Adjust times to be realistic based on the user's description. Output pure JSON only — no markdown, no backticks.`;
 
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
@@ -735,45 +743,117 @@ export async function generateSmartStudyCalendar(
 
     if (response.text) {
       const newSessions = JSON.parse(response.text.trim()) as CalendarEvent[];
-      // Filter out duplicate IDs and return merged events
+      // Replace old AI study sessions with new ones, keep fixed events (sleep, class, etc.)
       return [...existingEvents.filter(e => !e.isStudySession), ...newSessions];
     }
     throw new Error('AI schedule generation failed.');
   } catch (e) {
-    console.error('Gemini smart calendar scheduling failed, using mock schedule generator:', e);
-    return generateMockCalendarSchedule(existingEvents);
+    console.error('Gemini smart calendar scheduling failed, using smart fallback:', e);
+    return generateMockCalendarSchedule(promptText, existingEvents);
   }
 }
 
 /**
- * Generate a fallback mock conflict-free study schedule
+ * Generate a smart fallback schedule from the prompt text when Gemini is unavailable
  */
-function generateMockCalendarSchedule(existingEvents: CalendarEvent[]): CalendarEvent[] {
-  // Clear old study sessions and recreate optimized study blocks in empty slots
+function generateMockCalendarSchedule(promptText: string, existingEvents: CalendarEvent[]): CalendarEvent[] {
   const nonStudy = existingEvents.filter(e => !e.isStudySession);
   const now = new Date();
-  
+
+  // Try to extract a free-hour window from the prompt text
+  const text = promptText.toLowerCase();
+  let freeStartHour = 15; // default 3 PM
+  let freeEndHour = 18;   // default 6 PM
+
+  // Parse "free from Xpm" or "available after X"
+  const freeFromMatch = text.match(/(?:free|available|study)\s+(?:from\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  if (freeFromMatch) {
+    let h = parseInt(freeFromMatch[1]);
+    const ampm = freeFromMatch[3]?.toLowerCase();
+    if (ampm === 'pm' && h < 12) h += 12;
+    if (ampm === 'am' && h === 12) h = 0;
+    freeStartHour = h;
+    freeEndHour = Math.min(h + 3, 22); // 3 hours window
+  }
+
+  // Parse "sleep at X" or "sleep by X"
+  const sleepMatch = text.match(/sleep\s+(?:at|by)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  if (sleepMatch) {
+    let h = parseInt(sleepMatch[1]);
+    const ampm = sleepMatch[3]?.toLowerCase();
+    if (ampm === 'pm' && h < 12) h += 12;
+    if (ampm === 'am' && h === 12) h = 0;
+    freeEndHour = Math.min(h - 1, 23);
+  }
+
+  // Extract topic hints from prompt
+  const topicHints: string[] = [];
+  const topicKeywords: [string, string][] = [
+    ['graph', 'Graph Theory & BFS/DFS'],
+    ['dp', 'Dynamic Programming'],
+    ['dynamic programming', 'Dynamic Programming'],
+    ['tree', 'Trees & Binary Trees'],
+    ['binary search', 'Binary Search'],
+    ['greedy', 'Greedy Algorithms'],
+    ['os', 'Operating Systems'],
+    ['operating system', 'Operating Systems'],
+    ['dbms', 'DBMS & SQL'],
+    ['database', 'DBMS & SQL'],
+    ['system design', 'System Design'],
+    ['machine learning', 'Machine Learning'],
+    ['deep learning', 'Deep Learning'],
+    [' ml ', 'Machine Learning'],
+    ['network', 'Computer Networks'],
+    ['math', 'Number Theory & Math'],
+    ['segment tree', 'Segment Trees'],
+    ['contest', 'Contest Practice & Upsolving'],
+  ];
+  for (const [kw, label] of topicKeywords) {
+    if (text.includes(kw) && !topicHints.includes(label)) topicHints.push(label);
+  }
+  if (topicHints.length === 0) {
+    topicHints.push('Graph Theory & BFS/DFS', 'Dynamic Programming', 'Binary Search', 'Greedy Algorithms', 'Contest Practice');
+  }
+
+  // Session durations — 1 to 2 hours
+  const durations = [60, 90, 90, 120, 60, 90, 90, 60, 120, 90];
   const studySessions: CalendarEvent[] = [];
-  const topics = ['Graph Theory BFS', 'Dynamic Programming Coin Change', 'Binary Search Limits', 'Segment Trees Query', 'Greedy Algorithms Review', 'Contest Upsolving'];
-  
-  for (let i = 0; i < 6; i++) {
-    const studyDay = new Date();
-    studyDay.setDate(now.getDate() + i);
-    
-    // Choose evening slot 3 PM to 5 PM (15:00 to 17:00), which doesn't clash with college/work (10 AM to 2 PM) or sleep (11 PM to 7 AM)
-    const start = new Date(studyDay);
-    start.setHours(15, 0, 0, 0);
-    const end = new Date(studyDay);
-    end.setHours(17, 30, 0, 0);
-    
-    studySessions.push({
-      id: `study-auto-${i}`,
-      title: `Study: ${topics[i % topics.length]}`,
-      start: start.toISOString(),
-      end: end.toISOString(),
-      isStudySession: true,
-      category: 'study',
-    });
+  let topicIdx = 0;
+
+  for (let i = 0; i < 7 && studySessions.length < 10; i++) {
+    const day = new Date(now);
+    day.setDate(now.getDate() + i);
+    const isWeekend = day.getDay() === 0 || day.getDay() === 6;
+
+    // Weekdays: 1 session; Weekends: 2 sessions
+    const sessionsForDay = isWeekend ? 2 : 1;
+    let slotStart = freeStartHour;
+
+    for (let s = 0; s < sessionsForDay && studySessions.length < 10; s++) {
+      const durationMins = durations[studySessions.length % durations.length];
+      const endHour = slotStart + durationMins / 60;
+      if (endHour > freeEndHour) break;
+
+      const start = new Date(day);
+      start.setHours(slotStart, 0, 0, 0);
+      const end = new Date(day);
+      end.setHours(Math.floor(slotStart + durationMins / 60), (durationMins % 60), 0, 0);
+
+      const topic = topicHints[topicIdx % topicHints.length];
+      const durationLabel = durationMins >= 60 ? `${durationMins / 60}h` : `${durationMins}m`;
+
+      studySessions.push({
+        id: `study-auto-${i}-${s}`,
+        title: `Study: ${topic} — ${durationLabel}`,
+        start: start.toISOString(),
+        end: end.toISOString(),
+        isStudySession: true,
+        category: 'study',
+      });
+
+      topicIdx++;
+      slotStart = endHour + 0.5; // 30 min gap between sessions
+    }
   }
 
   return [...nonStudy, ...studySessions];
@@ -819,3 +899,72 @@ export function convertCalendarEventsToSchedules(events: CalendarEvent[]): Sched
     };
   });
 }
+
+/**
+ * Fetch upcoming contests dynamically from Contest Hive with a direct Codeforces API fallback.
+ */
+export async function fetchUpcomingContests(): Promise<UpcomingContest[]> {
+  const results: UpcomingContest[] = [];
+
+  const tryFetch = async (url: string, platform: UpcomingContest['platform']) => {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+      if (!res.ok) return;
+      const json = await res.json();
+      if (!json.ok || !Array.isArray(json.data)) return;
+      for (const c of json.data) {
+        const startMs = new Date(c.startTime).getTime();
+        // Only include future contests
+        if (startMs > Date.now()) {
+          results.push({
+            name: c.title,
+            startTime: startMs,
+            url: c.url || '#',
+            platform,
+            durationSeconds: c.duration || 7200,
+          });
+        }
+      }
+    } catch (e) {
+      console.warn(`Failed to fetch ${platform} contests from Contest Hive:`, e);
+    }
+  };
+
+  await Promise.all([
+    tryFetch('https://contest-hive.vercel.app/api/codeforces', 'Codeforces'),
+    tryFetch('https://contest-hive.vercel.app/api/leetcode', 'LeetCode'),
+    tryFetch('https://contest-hive.vercel.app/api/atcoder', 'AtCoder'),
+  ]);
+
+  // If we couldn't get any Codeforces contests from Contest Hive, query Codeforces directly
+  const hasCF = results.some(r => r.platform === 'Codeforces');
+  if (!hasCF) {
+    try {
+      const cfRes = await fetch('https://codeforces.com/api/contest.list?gym=false', { signal: AbortSignal.timeout(5000) });
+      if (cfRes.ok) {
+        const data = await cfRes.json();
+        if (data.status === 'OK' && Array.isArray(data.result)) {
+          for (const c of data.result) {
+            if (c.phase === 'BEFORE') {
+              results.push({
+                name: c.name,
+                startTime: c.startTimeSeconds * 1000,
+                url: `https://codeforces.com/contest/${c.id}`,
+                platform: 'Codeforces',
+                durationSeconds: c.durationSeconds,
+              });
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Failed fallback Codeforces direct fetch:', e);
+    }
+  }
+
+  // Sort by start time ascending, limit to next 10 contests
+  return results
+    .sort((a, b) => a.startTime - b.startTime)
+    .slice(0, 10);
+}
+

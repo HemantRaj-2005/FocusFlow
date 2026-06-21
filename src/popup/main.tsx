@@ -4,15 +4,9 @@ import { Schedule, BreakState, CPProfiles, CoachReport } from '../types';
 import { getAppState, saveAppState, subscribeToKey } from '../storage/chromeStorage';
 import { getCurrentTask, getRemainingSeconds, formatRemainingTime } from '../utils/time';
 import { Zap, BookOpen, Coffee, Settings, Timer, CheckCircle2, Award, ExternalLink, Brain, RefreshCw } from 'lucide-react';
-import { syncCodeforces, syncLeetCode, syncAtCoder, generateCPCoachReport } from '../services/cpCoach';
+import { syncCodeforces, syncLeetCode, syncAtCoder, generateCPCoachReport, fetchUpcomingContests } from '../services/cpCoach';
 import '../index.css';
 
-// Mock contests matching background worker
-const MOCK_UPCOMING_CONTESTS = [
-  { name: "Codeforces Round #960 (Div. 2)", startTime: Date.now() + 25 * 60 * 1000, platform: "Codeforces" },
-  { name: "LeetCode Biweekly Contest 134", startTime: Date.now() + 15 * 3600 * 1000, platform: "LeetCode" },
-  { name: "AtCoder Beginner Contest 360", startTime: Date.now() + 32 * 3600 * 1000, platform: "AtCoder" }
-];
 
 const Popup: React.FC = () => {
   const [activeTask, setActiveTask] = useState<Schedule | null>(null);
@@ -58,14 +52,19 @@ const Popup: React.FC = () => {
       const todayScore = state.analytics.focusScoreHistory.find(e => e.date === todayStr)?.score ?? 100;
       setFocusScore(todayScore);
 
-      // Find nearest upcoming contest
-      const now = Date.now();
-      const nextC = MOCK_UPCOMING_CONTESTS.find(c => c.startTime > now);
-      if (nextC) {
-        setNearestContest(nextC);
-      }
+      // Find nearest upcoming contest dynamically
+      fetchUpcomingContests().then((contests) => {
+        const now = Date.now();
+        const nextC = contests.find(c => c.startTime > now);
+        if (nextC) {
+          setNearestContest(nextC);
+        }
+      }).catch((e) => {
+        console.warn('Failed to fetch contests in popup:', e);
+      });
     }
     loadData();
+
   }, []);
 
   // Subscribe to changes in schedules, break state, analytics, profiles, and coach reports

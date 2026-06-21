@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Schedule, FocusAnalytics, BreakState, OnboardingState, CPProfiles, CPGoal, StudyNote, CalendarEvent, CoachReport } from '../types';
+import { Schedule, FocusAnalytics, BreakState, OnboardingState, CPProfiles, CPGoal, StudyNote, CalendarEvent, CoachReport, UpcomingContest } from '../types';
 import { getAppState, saveAppState, subscribeToKey, getStorageItem } from '../storage/chromeStorage';
 import { getCurrentTask, getRemainingSeconds, formatRemainingTime, formatTimeSlot, isTaskActiveNow } from '../utils/time';
 import {
@@ -12,54 +12,10 @@ import {
 import {
   syncCodeforces, syncLeetCode, syncAtCoder,
   parseNaturalLanguageGoal, generateCPCoachReport,
-  generateSmartStudyCalendar, convertCalendarEventsToSchedules
+  generateSmartStudyCalendar, convertCalendarEventsToSchedules,
+  fetchUpcomingContests
 } from '../services/cpCoach';
 
-interface UpcomingContest {
-  name: string;
-  startTime: number; // Unix ms
-  url: string;
-  platform: 'Codeforces' | 'LeetCode' | 'AtCoder';
-  durationSeconds: number;
-}
-
-async function fetchUpcomingContests(): Promise<UpcomingContest[]> {
-  const results: UpcomingContest[] = [];
-
-  const tryFetch = async (url: string, platform: UpcomingContest['platform']) => {
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
-      if (!res.ok) return;
-      const data: any[] = await res.json();
-      for (const c of data) {
-        const startMs = new Date(c.start_time).getTime();
-        // Only include future contests
-        if (startMs > Date.now()) {
-          results.push({
-            name: c.name,
-            startTime: startMs,
-            url: c.url || '#',
-            platform,
-            durationSeconds: parseInt(c.duration) || 7200,
-          });
-        }
-      }
-    } catch (e) {
-      console.warn(`Failed to fetch ${platform} contests:`, e);
-    }
-  };
-
-  await Promise.all([
-    tryFetch('https://kontests.net/api/v1/codeforces', 'Codeforces'),
-    tryFetch('https://kontests.net/api/v1/leet_code', 'LeetCode'),
-    tryFetch('https://kontests.net/api/v1/at_coder', 'AtCoder'),
-  ]);
-
-  // Sort by start time ascending, return next 6
-  return results
-    .sort((a, b) => a.startTime - b.startTime)
-    .slice(0, 6);
-}
 
 // Web Crypto SHA-256 hashing utility
 async function hashPassword(password: string): Promise<string> {
@@ -227,13 +183,8 @@ export default function Dashboard() {
   const [noteSearch, setNoteSearch] = useState('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
 
-  // Calendar Planner State
-  const [availability, setAvailability] = useState({
-    sleepStart: '23:00',
-    sleepEnd: '07:00',
-    workStart: '10:00',
-    workEnd: '14:00',
-  });
+  // Calendar Planner State — free-text prompt replaces fixed time pickers
+  const [calendarPrompt, setCalendarPrompt] = useState('');
   const [generatingCalendar, setGeneratingCalendar] = useState(false);
 
   // Fetch live contests on mount
@@ -712,17 +663,20 @@ export default function Dashboard() {
     }
   };
 
-  // Calendar sync & planner
+  // Calendar sync & planner — uses free-text prompt instead of fixed time pickers
   const handleGenerateSmartCalendar = async () => {
+    if (!calendarPrompt.trim()) {
+      alert('Please describe your schedule and goals in the prompt box first.');
+      return;
+    }
     setGeneratingCalendar(true);
     try {
-      const mergedEvents = await generateSmartStudyCalendar(cpGoals, availability, calendarEvents);
+      const mergedEvents = await generateSmartStudyCalendar(cpGoals, calendarPrompt, calendarEvents);
       setCalendarEvents(mergedEvents);
       await saveAppState({ calendarEvents: mergedEvents });
-      alert('Smart Study sessions planned around your Sleep & College hours!');
     } catch (e) {
       console.error(e);
-      alert('Error generating calendar planner.');
+      alert('Error generating calendar. Please try again.');
     } finally {
       setGeneratingCalendar(false);
     }
@@ -2019,77 +1973,95 @@ export default function Dashboard() {
           {/* TAB 6: SMART CALENDAR & GOOGLE CALENDAR SYNC */}
           {activeTab === 'calendar' && (
             <div className="flex flex-col gap-6 max-w-4xl animate-slide-up">
-              {/* Top controls row */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {/* Availability Config */}
-                <div className="glass rounded-2xl p-5 border-white/5 flex flex-col gap-3">
-                  <div>
-                    <h3 className="text-sm font-bold text-white mb-0.5">Availability Limits</h3>
-                    <p className="text-[10px] text-slate-400">Blocked hours the AI will never schedule over.</p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div>
-                      <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Sleep Start</label>
-                      <input type="time" value={availability.sleepStart} onChange={e => setAvailability({ ...availability, sleepStart: e.target.value })} className="w-full bg-slate-950 border border-white/10 outline-none rounded-lg p-2 font-mono text-slate-200" />
-                    </div>
-                    <div>
-                      <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Sleep End</label>
-                      <input type="time" value={availability.sleepEnd} onChange={e => setAvailability({ ...availability, sleepEnd: e.target.value })} className="w-full bg-slate-950 border border-white/10 outline-none rounded-lg p-2 font-mono text-slate-200" />
-                    </div>
-                    <div>
-                      <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1">College/Work Start</label>
-                      <input type="time" value={availability.workStart} onChange={e => setAvailability({ ...availability, workStart: e.target.value })} className="w-full bg-slate-950 border border-white/10 outline-none rounded-lg p-2 font-mono text-slate-200" />
-                    </div>
-                    <div>
-                      <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1">College/Work End</label>
-                      <input type="time" value={availability.workEnd} onChange={e => setAvailability({ ...availability, workEnd: e.target.value })} className="w-full bg-slate-950 border border-white/10 outline-none rounded-lg p-2 font-mono text-slate-200" />
-                    </div>
-                  </div>
-                  <button
-                    onClick={handleGenerateSmartCalendar}
-                    disabled={generatingCalendar}
-                    className="w-full bg-gradient-to-r from-indigo-500 to-pink-500 hover:from-indigo-600 hover:to-pink-600 text-white font-semibold text-xs py-2.5 px-4 rounded-xl transition-all shadow-lg"
-                  >
-                    {generatingCalendar ? '⏳ Planning slots...' : '✨ AI Auto-Schedule Week'}
-                  </button>
+
+              {/* Prompt-based AI Planner */}
+              <div className="glass rounded-2xl p-6 border-white/5 flex flex-col gap-4">
+                <div>
+                  <h3 className="text-sm font-bold text-white">AI Study Schedule Generator</h3>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Describe your goals, daily routine, and timings in plain English. The AI will generate a realistic personalized weekly schedule — no dropdowns needed.
+                  </p>
                 </div>
 
-                {/* Stats & Actions */}
-                <div className="glass rounded-2xl p-5 border-white/5 md:col-span-2 flex flex-col gap-4">
-                  <div>
-                    <h3 className="text-sm font-bold text-white mb-0.5">Schedule Summary</h3>
-                    <p className="text-[10px] text-slate-400">Live counts from your Study Planner and AI-generated calendar events.</p>
+                {/* Example prompts as chips */}
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    'I wake up at 7am, college from 10am–2pm, free from 3pm–10pm. Goal: CF 2000. Focus on DP and Graphs daily. Sleep by 11pm.',
+                    'Weekdays: college 9am–1pm, study from 2pm–6pm. Weekends: 4 hours of CP + 2 hours System Design. Target: SDE placement.',
+                    'Free after 5pm on weekdays. Mornings 6am–8am also free. Goal: DBMS + OS + ML basics + CF 1800 by December.',
+                  ].map((ex, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setCalendarPrompt(ex)}
+                      className="text-[9px] text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 px-2 py-1 rounded-lg hover:bg-indigo-500/20 transition-all text-left leading-tight max-w-xs"
+                    >
+                      💡 {ex.slice(0, 60)}…
+                    </button>
+                  ))}
+                </div>
+
+                <textarea
+                  value={calendarPrompt}
+                  onChange={e => setCalendarPrompt(e.target.value)}
+                  rows={5}
+                  placeholder="e.g. I wake up at 7am. College is from 10am to 2pm Mon–Fri. I'm free from 3pm to 10pm. On weekends I have the full day. My goal is to reach Codeforces 2000 rating. I want to study: DP and Graphs for CP, Operating Systems, DBMS, and System Design for SDE prep. I also want 1 hour per day for Machine Learning. Please schedule realistic 1–2 hour sessions. Sleep by 11:30pm."
+                  className="w-full bg-slate-950 border border-white/10 focus:border-indigo-500/60 outline-none rounded-xl p-4 text-xs text-slate-200 leading-relaxed resize-none transition-all font-medium placeholder:text-slate-600"
+                />
+
+                <div className="flex gap-3 items-center">
+                  <button
+                    onClick={handleGenerateSmartCalendar}
+                    disabled={generatingCalendar || !calendarPrompt.trim()}
+                    className="flex-1 bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs py-3 px-6 rounded-xl transition-all shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2"
+                  >
+                    {generatingCalendar ? (
+                      <>
+                        <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                        Generating your personal schedule…
+                      </>
+                    ) : (
+                      <>
+                        <Brain className="h-3.5 w-3.5" />
+                        Generate My Weekly Schedule
+                      </>
+                    )}
+                  </button>
+                  {calendarEvents.filter(e => e.isStudySession).length > 0 && (
+                    <button
+                      onClick={() => {
+                        setCalendarEvents(prev => {
+                          const cleared = prev.filter(e => !e.isStudySession);
+                          saveAppState({ calendarEvents: cleared });
+                          return cleared;
+                        });
+                      }}
+                      className="text-[10px] text-rose-400 hover:text-rose-300 border border-rose-500/20 bg-rose-500/5 px-3 py-2.5 rounded-xl transition-all font-semibold"
+                    >
+                      Clear Sessions
+                    </button>
+                  )}
+                </div>
+
+                {/* Live summary strip */}
+                <div className="grid grid-cols-3 gap-3 pt-2 border-t border-white/5">
+                  <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-3 text-center">
+                    <p className="text-xl font-bold font-mono text-indigo-300">{schedules.length}</p>
+                    <p className="text-[9px] text-slate-400 uppercase mt-0.5">Planner Blocks</p>
                   </div>
-                  <div className="grid grid-cols-3 gap-3">
-                    <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-3 text-center">
-                      <p className="text-2xl font-bold font-mono text-indigo-300">
-                        {schedules.length}
-                      </p>
-                      <p className="text-[9px] text-slate-400 uppercase mt-0.5">Study Blocks</p>
-                    </div>
-                    <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 text-center">
-                      <p className="text-2xl font-bold font-mono text-emerald-300">
-                        {calendarEvents.filter(e => e.isStudySession).length}
-                      </p>
-                      <p className="text-[9px] text-slate-400 uppercase mt-0.5">AI Sessions</p>
-                    </div>
-                    <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 text-center">
-                      <p className="text-2xl font-bold font-mono text-amber-300">
-                        {calendarEvents.filter(e => e.category === 'class').length}
-                      </p>
-                      <p className="text-[9px] text-slate-400 uppercase mt-0.5">Class Slots</p>
-                    </div>
+                  <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 text-center">
+                    <p className="text-xl font-bold font-mono text-emerald-300">{calendarEvents.filter(e => e.isStudySession).length}</p>
+                    <p className="text-[9px] text-slate-400 uppercase mt-0.5">AI Sessions</p>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-col gap-1.5">
                     <button
                       onClick={handleImportSchedules}
-                      className="flex-1 bg-gradient-to-r from-indigo-500 to-pink-500 hover:from-indigo-600 hover:to-pink-600 text-white font-semibold text-xs py-2.5 px-4 rounded-xl transition-all"
+                      className="flex-1 bg-gradient-to-r from-indigo-500 to-pink-500 hover:from-indigo-600 hover:to-pink-600 text-white font-semibold text-[9px] py-1.5 px-3 rounded-lg transition-all"
                     >
-                      ↓ Push AI Sessions → Blocker
+                      ↓ Push to Blocker
                     </button>
                     <button
                       onClick={() => setActiveTab('planner')}
-                      className="px-4 py-2.5 bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5 font-semibold text-xs rounded-xl transition-all"
+                      className="flex-1 bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5 font-semibold text-[9px] py-1.5 px-3 rounded-lg transition-all"
                     >
                       Edit Planner →
                     </button>
