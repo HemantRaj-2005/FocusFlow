@@ -15,11 +15,51 @@ import {
   generateSmartStudyCalendar, convertCalendarEventsToSchedules
 } from '../services/cpCoach';
 
-const MOCK_UPCOMING_CONTESTS: { name: string; startTime: number; platform: string }[] = [
-  { name: "Codeforces Round #960 (Div. 2)", startTime: Date.now() + 25 * 60 * 1000, platform: "Codeforces" },
-  { name: "LeetCode Biweekly Contest 134", startTime: Date.now() + 15 * 3600 * 1000, platform: "LeetCode" },
-  { name: "AtCoder Beginner Contest 360", startTime: Date.now() + 32 * 3600 * 1000, platform: "AtCoder" }
-];
+interface UpcomingContest {
+  name: string;
+  startTime: number; // Unix ms
+  url: string;
+  platform: 'Codeforces' | 'LeetCode' | 'AtCoder';
+  durationSeconds: number;
+}
+
+async function fetchUpcomingContests(): Promise<UpcomingContest[]> {
+  const results: UpcomingContest[] = [];
+
+  const tryFetch = async (url: string, platform: UpcomingContest['platform']) => {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+      if (!res.ok) return;
+      const data: any[] = await res.json();
+      for (const c of data) {
+        const startMs = new Date(c.start_time).getTime();
+        // Only include future contests
+        if (startMs > Date.now()) {
+          results.push({
+            name: c.name,
+            startTime: startMs,
+            url: c.url || '#',
+            platform,
+            durationSeconds: parseInt(c.duration) || 7200,
+          });
+        }
+      }
+    } catch (e) {
+      console.warn(`Failed to fetch ${platform} contests:`, e);
+    }
+  };
+
+  await Promise.all([
+    tryFetch('https://kontests.net/api/v1/codeforces', 'Codeforces'),
+    tryFetch('https://kontests.net/api/v1/leet_code', 'LeetCode'),
+    tryFetch('https://kontests.net/api/v1/at_coder', 'AtCoder'),
+  ]);
+
+  // Sort by start time ascending, return next 6
+  return results
+    .sort((a, b) => a.startTime - b.startTime)
+    .slice(0, 6);
+}
 
 // Web Crypto SHA-256 hashing utility
 async function hashPassword(password: string): Promise<string> {
@@ -116,6 +156,24 @@ export default function Dashboard() {
   const [acInput, setAcInput] = useState('');
   const [syncing, setSyncing] = useState(false);
 
+  // Live Contest Tracker
+  const [upcomingContests, setUpcomingContests] = useState<UpcomingContest[]>([]);
+  const [contestsLoading, setContestsLoading] = useState(false);
+  const [contestsFetched, setContestsFetched] = useState(false);
+
+  const refreshContests = async () => {
+    setContestsLoading(true);
+    try {
+      const contests = await fetchUpcomingContests();
+      setUpcomingContests(contests);
+    } catch (e) {
+      console.warn('Contest fetch failed:', e);
+    } finally {
+      setContestsLoading(false);
+      setContestsFetched(true);
+    }
+  };
+
   // Manual Override states
   const [editManualMode, setEditManualMode] = useState(false);
   const [cfManualRating, setCfManualRating] = useState('0');
@@ -177,6 +235,11 @@ export default function Dashboard() {
     workEnd: '14:00',
   });
   const [generatingCalendar, setGeneratingCalendar] = useState(false);
+
+  // Fetch live contests on mount
+  useEffect(() => {
+    refreshContests();
+  }, []);
 
   // Load and subscribe to state
   useEffect(() => {
@@ -1198,44 +1261,90 @@ export default function Dashboard() {
                   <div className="h-52">{renderFocusScoreChart()}</div>
                 </div>
 
-                {/* Upcoming Contests countdown calendar widget */}
-                <div className="glass rounded-2xl p-6 border-white/5 flex flex-col justify-between">
-                  <div>
-                    <h3 className="text-sm font-bold text-white mb-2">Contest Tracker</h3>
-                    <p className="text-[10px] text-slate-400 mb-4">Upcoming events across linked platforms.</p>
+                {/* Upcoming Contests countdown calendar widget — Live data from Kontests API */}
+                <div className="glass rounded-2xl p-6 border-white/5 flex flex-col gap-3">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <h3 className="text-sm font-bold text-white">Contest Tracker</h3>
+                      <p className="text-[10px] text-slate-400 mt-0.5">Live upcoming contests across platforms.</p>
+                    </div>
+                    <button
+                      onClick={refreshContests}
+                      disabled={contestsLoading}
+                      title="Refresh contests"
+                      className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/5 transition-all disabled:opacity-50"
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 text-slate-400 ${contestsLoading ? 'animate-spin' : ''}`} />
+                    </button>
                   </div>
-                  <div className="flex flex-col gap-3">
-                    {MOCK_UPCOMING_CONTESTS.map((c, i) => {
-                      const minsLeft = Math.round((c.startTime - Date.now()) / (60 * 1000));
-                      const hours = Math.floor(minsLeft / 60);
-                      const mins = minsLeft % 60;
-                      return (
-                        <div key={i} className="flex justify-between items-center p-2.5 bg-white/5 rounded-xl border border-white/5">
-                          <div>
-                            <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded uppercase ${
-                              c.platform === 'Codeforces' ? 'bg-red-500/10 text-red-400' :
-                              c.platform === 'LeetCode' ? 'bg-amber-500/10 text-amber-400' : 'bg-blue-500/10 text-blue-400'
-                            }`}>{c.platform}</span>
-                            <h4 className="text-xs font-bold text-white mt-1 leading-tight">{c.name}</h4>
+
+                  {contestsLoading && upcomingContests.length === 0 ? (
+                    <div className="flex flex-col gap-2">
+                      {[0,1,2].map(i => (
+                        <div key={i} className="h-14 bg-white/5 rounded-xl border border-white/5 animate-pulse" />
+                      ))}
+                    </div>
+                  ) : contestsFetched && upcomingContests.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-6 gap-2">
+                      <AlertCircle className="h-6 w-6 text-slate-600" />
+                      <p className="text-xs text-slate-500 text-center">No upcoming contests found.<br/>Check your connection or try refreshing.</p>
+                      <button onClick={refreshContests} className="text-[10px] text-indigo-400 underline font-semibold mt-1">Retry</button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      {upcomingContests.map((c, i) => {
+                        const totalMins = Math.round((c.startTime - Date.now()) / (60 * 1000));
+                        const days = Math.floor(totalMins / (60 * 24));
+                        const hours = Math.floor((totalMins % (60 * 24)) / 60);
+                        const mins = totalMins % 60;
+                        const timeLabel = days > 0
+                          ? `${days}d ${hours}h`
+                          : hours > 0
+                          ? `${hours}h ${mins}m`
+                          : `${mins}m`;
+                        const isVeryClose = totalMins <= 60; // within 1 hour
+
+                        return (
+                          <div key={i} className="flex justify-between items-center p-2.5 bg-white/5 rounded-xl border border-white/5 hover:bg-white/8 transition-all">
+                            <div className="min-w-0 flex-1 pr-2">
+                              <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                                c.platform === 'Codeforces' ? 'bg-red-500/10 text-red-400' :
+                                c.platform === 'LeetCode' ? 'bg-amber-500/10 text-amber-400' : 'bg-blue-500/10 text-blue-400'
+                              }`}>{c.platform}</span>
+                              <h4 className="text-[11px] font-semibold text-slate-200 mt-1 leading-tight truncate">{c.name}</h4>
+                            </div>
+                            <div className="text-right shrink-0 flex flex-col items-end gap-0.5">
+                              <span className={`text-[10px] font-mono font-bold ${
+                                isVeryClose ? 'text-rose-400 animate-pulse' : 'text-indigo-400'
+                              }`}>
+                                {isVeryClose && '🔴 '}{timeLabel}
+                              </span>
+                              <div className="flex gap-1.5">
+                                <a
+                                  href={c.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-[8px] text-slate-400 hover:text-white underline font-semibold"
+                                >
+                                  Open
+                                </a>
+                                <button
+                                  onClick={() => {
+                                    const endMs = c.startTime + c.durationSeconds * 1000;
+                                    const calUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(c.name)}&dates=${new Date(c.startTime).toISOString().replace(/-|:|\.\d\d\d/g, '')}/${new Date(endMs).toISOString().replace(/-|:|\.\d\d\d/g, '')}&details=FocusFlow+Contest+Reminder+-+${encodeURIComponent(c.platform)}`;
+                                    window.open(calUrl, '_blank');
+                                  }}
+                                  className="text-[8px] text-indigo-300 hover:text-indigo-200 underline font-semibold"
+                                >
+                                  + Cal
+                                </button>
+                              </div>
+                            </div>
                           </div>
-                          <div className="text-right shrink-0">
-                            <span className="text-[9px] font-mono text-indigo-400 block font-bold">
-                              {hours > 0 ? `${hours}h ${mins}m` : `${mins}m`}
-                            </span>
-                            <button
-                              onClick={() => {
-                                const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(c.name)}&dates=${new Date(c.startTime).toISOString().replace(/-|:|\.\d\d\d/g, '')}/${new Date(c.startTime + 2 * 3600 * 1000).toISOString().replace(/-|:|\.\d\d\d/g, '')}&details=FocusFlow+Contest+Reminder`;
-                                window.open(url, '_blank');
-                              }}
-                              className="text-[8px] text-indigo-300 underline font-semibold mt-0.5"
-                            >
-                              Add to Cal
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
 
