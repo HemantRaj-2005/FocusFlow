@@ -389,23 +389,54 @@ export async function parseNaturalLanguageGoal(goalText: string): Promise<CPGoal
 
     const ai = new GoogleGenAI({ apiKey });
     
-    const prompt = `You are a study planner parsing natural language competitive programming / interview prep goals into a structured learning target.
-    User goal statement: "${goalText}"
-    
-    Extract:
-    1. targetRating: target rating number (e.g. if they want to reach Codeforces Expert, target is 1600. Specialist: 1400, Pupil: 1200. If they mention crack Google/FAANG SWE, target is 1900. If they mention 1800, target is 1800. Default to 1600 if undefined).
-    2. deadline: deadline date in YYYY-MM-DD format (estimate relative to today: 2026-06-22. e.g. "6 months" is 2026-12-22. Default to 6 months if unspecified).
-    3. weeklyHours: target study hours per week (default to 15 if unspecified).
-    4. priorityTopics: list of key technical areas mentioned or logically matching this goal (e.g., ["Dynamic Programming", "Graphs", "Trees", "Binary Search"]).
-    
-    Output EXACTLY a JSON matching this schema:
-    {
-      "targetRating": <number>,
-      "deadline": "<YYYY-MM-DD>",
-      "weeklyHours": <number>,
-      "priorityTopics": [<string>]
-    }
-    DO NOT output code block backticks or markdown, output pure JSON.`;
+    const prompt = `You are a study planner parsing a user's competitive programming AND software engineering interview prep goal into structured learning targets. The user may have MULTIPLE goals combined in one statement.
+
+User goal statement: "${goalText}"
+
+Today's date: 2026-06-22
+
+RULES for targetRating (Codeforces rating scale):
+- Newbie: < 1200
+- Pupil: 1200–1399
+- Specialist: 1400–1599
+- Expert: 1600–1899
+- Candidate Master: 1900–2099
+- Master: 2100–2299
+- International Master: 2300–2399
+- Grandmaster: 2400+
+- If they say "2000 rating" → targetRating = 2000
+- If they say "Candidate Master" → targetRating = 1900
+- If they say "Expert" → targetRating = 1600
+- If they say "FAANG / Google / Meta SDE" → targetRating = 1900
+- If they explicitly say a number (like 1800, 2000, 2100) → use that exact number
+- Default to 1600 if no rating is mentioned
+
+RULES for priorityTopics:
+- Extract EVERY technical area mentioned, including:
+  - CP topics: Dynamic Programming, Graphs, Trees, Binary Search, Greedy, Segment Trees, etc.
+  - SDE / interview topics: Operating Systems, DBMS, System Design, Computer Networks, OOP, SQL
+  - ML/AI: Machine Learning, Deep Learning, Neural Networks, NLP
+  - Languages: C++, Python, Java
+- Combine ALL topics from ALL goals in the statement into one list
+- Do NOT omit topics just because they are SDE/ML related rather than pure CP
+
+RULES for deadline:
+- "6 months" from today = 2026-12-22
+- "1 year" from today = 2027-06-22
+- Default to 6 months if unspecified
+
+RULES for weeklyHours:
+- Default to 20 if the goal is ambitious (rating >= 1800 or multiple subjects mentioned)
+- Default to 15 otherwise
+
+Output EXACTLY a JSON matching this schema:
+{
+  "targetRating": <number>,
+  "deadline": "<YYYY-MM-DD>",
+  "weeklyHours": <number>,
+  "priorityTopics": [<string>]
+}
+DO NOT output code block backticks or markdown, output pure JSON.`;
 
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
@@ -425,13 +456,73 @@ export async function parseNaturalLanguageGoal(goalText: string): Promise<CPGoal
     throw new Error('Empty response from AI.');
   } catch (e) {
     console.error('Gemini goal parsing failed, using fallback:', e);
-    // Simple regex fallback
-    return {
-      targetRating: goalText.toLowerCase().includes('expert') ? 1600 : 1400,
-      deadline: '2026-12-22',
-      weeklyHours: 15,
-      priorityTopics: ['Arrays', 'Greedy', 'DP'],
-    };
+    // Smart regex fallback — parses rating numbers, CF rank names, and topic keywords
+    const text = goalText.toLowerCase();
+
+    // Parse target rating
+    let targetRating = 1600;
+    const ratingMatch = text.match(/\b(1[0-9]{3}|2[0-9]{3})\b/);
+    if (ratingMatch) {
+      targetRating = parseInt(ratingMatch[1]);
+    } else if (text.includes('grandmaster')) targetRating = 2400;
+    else if (text.includes('international master')) targetRating = 2300;
+    else if (text.includes('master')) targetRating = 2100;
+    else if (text.includes('candidate master')) targetRating = 1900;
+    else if (text.includes('expert')) targetRating = 1600;
+    else if (text.includes('specialist')) targetRating = 1400;
+    else if (text.includes('faang') || text.includes('google') || text.includes('sde')) targetRating = 1900;
+
+    // Parse topics from broad keyword matching
+    const topicMap: [string, string][] = [
+      ['operating system', 'Operating Systems'],
+      ['os', 'Operating Systems'],
+      ['dbms', 'DBMS'],
+      ['database', 'DBMS'],
+      ['system design', 'System Design'],
+      ['machine learning', 'Machine Learning'],
+      ['deep learning', 'Deep Learning'],
+      ['neural network', 'Neural Networks'],
+      [' ml ', 'Machine Learning'],
+      [' ai ', 'AI / ML'],
+      ['dynamic programming', 'Dynamic Programming'],
+      [' dp ', 'Dynamic Programming'],
+      ['graph', 'Graphs'],
+      ['tree', 'Trees'],
+      ['binary search', 'Binary Search'],
+      ['greedy', 'Greedy'],
+      ['segment tree', 'Segment Trees'],
+      ['computer network', 'Computer Networks'],
+      ['sql', 'SQL'],
+      ['oop', 'OOP'],
+      ['array', 'Arrays'],
+    ];
+
+    const topics: string[] = [];
+    for (const [keyword, label] of topicMap) {
+      if (text.includes(keyword) && !topics.includes(label)) topics.push(label);
+    }
+    if (topics.length === 0) topics.push('Dynamic Programming', 'Graphs', 'Binary Search');
+
+    // Parse weeklyHours — ambitious goals get more hours
+    const weeklyHours = (targetRating >= 1800 || topics.length >= 4) ? 20 : 15;
+
+    // Parse deadline
+    let deadline = '2026-12-22';
+    const monthMatch = text.match(/(\d+)\s*month/);
+    const yearMatch = text.match(/(\d+)\s*year/);
+    if (yearMatch) {
+      const years = parseInt(yearMatch[1]);
+      const d = new Date('2026-06-22');
+      d.setFullYear(d.getFullYear() + years);
+      deadline = d.toISOString().split('T')[0];
+    } else if (monthMatch) {
+      const months = parseInt(monthMatch[1]);
+      const d = new Date('2026-06-22');
+      d.setMonth(d.getMonth() + months);
+      deadline = d.toISOString().split('T')[0];
+    }
+
+    return { targetRating, deadline, weeklyHours, priorityTopics: topics };
   }
 }
 

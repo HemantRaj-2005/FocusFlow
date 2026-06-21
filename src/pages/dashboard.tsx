@@ -2019,79 +2019,210 @@ export default function Dashboard() {
           {/* TAB 6: SMART CALENDAR & GOOGLE CALENDAR SYNC */}
           {activeTab === 'calendar' && (
             <div className="flex flex-col gap-6 max-w-4xl animate-slide-up">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {/* Availability Configurations */}
-                <div className="glass rounded-2xl p-6 border-white/5 flex flex-col justify-between gap-4">
+              {/* Top controls row */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Availability Config */}
+                <div className="glass rounded-2xl p-5 border-white/5 flex flex-col gap-3">
                   <div>
-                    <h3 className="text-sm font-bold text-white mb-1">Availability Limits</h3>
-                    <p className="text-[10px] text-slate-400">Configure hours to avoid scheduling study blocks inside them.</p>
+                    <h3 className="text-sm font-bold text-white mb-0.5">Availability Limits</h3>
+                    <p className="text-[10px] text-slate-400">Blocked hours the AI will never schedule over.</p>
                   </div>
-                  <div className="flex flex-col gap-3 text-xs">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="text-[10px] font-bold text-slate-400 block mb-1">Sleep Start</label>
-                        <input type="time" value={availability.sleepStart} onChange={e => setAvailability({ ...availability, sleepStart: e.target.value })} className="w-full bg-slate-950 border border-white/10 outline-none rounded-lg p-2 font-mono" />
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-bold text-slate-400 block mb-1">Sleep End</label>
-                        <input type="time" value={availability.sleepEnd} onChange={e => setAvailability({ ...availability, sleepEnd: e.target.value })} className="w-full bg-slate-950 border border-white/10 outline-none rounded-lg p-2 font-mono" />
-                      </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Sleep Start</label>
+                      <input type="time" value={availability.sleepStart} onChange={e => setAvailability({ ...availability, sleepStart: e.target.value })} className="w-full bg-slate-950 border border-white/10 outline-none rounded-lg p-2 font-mono text-slate-200" />
                     </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="text-[10px] font-bold text-slate-400 block mb-1">College/Work Start</label>
-                        <input type="time" value={availability.workStart} onChange={e => setAvailability({ ...availability, workStart: e.target.value })} className="w-full bg-slate-950 border border-white/10 outline-none rounded-lg p-2 font-mono" />
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-bold text-slate-400 block mb-1">College/Work End</label>
-                        <input type="time" value={availability.workEnd} onChange={e => setAvailability({ ...availability, workEnd: e.target.value })} className="w-full bg-slate-950 border border-white/10 outline-none rounded-lg p-2 font-mono" />
-                      </div>
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Sleep End</label>
+                      <input type="time" value={availability.sleepEnd} onChange={e => setAvailability({ ...availability, sleepEnd: e.target.value })} className="w-full bg-slate-950 border border-white/10 outline-none rounded-lg p-2 font-mono text-slate-200" />
+                    </div>
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1">College/Work Start</label>
+                      <input type="time" value={availability.workStart} onChange={e => setAvailability({ ...availability, workStart: e.target.value })} className="w-full bg-slate-950 border border-white/10 outline-none rounded-lg p-2 font-mono text-slate-200" />
+                    </div>
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1">College/Work End</label>
+                      <input type="time" value={availability.workEnd} onChange={e => setAvailability({ ...availability, workEnd: e.target.value })} className="w-full bg-slate-950 border border-white/10 outline-none rounded-lg p-2 font-mono text-slate-200" />
                     </div>
                   </div>
-                  <button onClick={handleGenerateSmartCalendar} disabled={generatingCalendar} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 px-4 rounded-xl transition-all mt-2">
-                    {generatingCalendar ? 'Planning slots...' : 'Run AI Calendar Planner'}
+                  <button
+                    onClick={handleGenerateSmartCalendar}
+                    disabled={generatingCalendar}
+                    className="w-full bg-gradient-to-r from-indigo-500 to-pink-500 hover:from-indigo-600 hover:to-pink-600 text-white font-semibold text-xs py-2.5 px-4 rounded-xl transition-all shadow-lg"
+                  >
+                    {generatingCalendar ? '⏳ Planning slots...' : '✨ AI Auto-Schedule Week'}
                   </button>
                 </div>
 
-                {/* Conflict Warnings & Google Calendar Sync actions */}
-                <div className="glass rounded-2xl p-6 border-white/5 md:col-span-2 flex flex-col justify-between">
+                {/* Stats & Actions */}
+                <div className="glass rounded-2xl p-5 border-white/5 md:col-span-2 flex flex-col gap-4">
                   <div>
-                    <h3 className="text-sm font-bold text-white mb-2 flex items-center gap-1">
-                      <AlertCircle className="h-4.5 w-4.5 text-amber-400" /> Conflict Management
-                    </h3>
-                    <p className="text-[10px] text-slate-400 mb-4 font-medium">Clashes detected against work, sleep, or college slots are automatically resolved.</p>
+                    <h3 className="text-sm font-bold text-white mb-0.5">Schedule Summary</h3>
+                    <p className="text-[10px] text-slate-400">Live counts from your Study Planner and AI-generated calendar events.</p>
                   </div>
-                  <div className="bg-slate-900/60 p-4 rounded-xl border border-white/5 text-xs text-slate-300 leading-relaxed my-2">
-                    <strong>Synced Status:</strong> Clashes avoided for 7 study sessions scheduled around lectures (10:00 - 14:00) and sleep blocks (23:00 - 07:00).
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-3 text-center">
+                      <p className="text-2xl font-bold font-mono text-indigo-300">
+                        {schedules.length}
+                      </p>
+                      <p className="text-[9px] text-slate-400 uppercase mt-0.5">Study Blocks</p>
+                    </div>
+                    <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 text-center">
+                      <p className="text-2xl font-bold font-mono text-emerald-300">
+                        {calendarEvents.filter(e => e.isStudySession).length}
+                      </p>
+                      <p className="text-[9px] text-slate-400 uppercase mt-0.5">AI Sessions</p>
+                    </div>
+                    <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 text-center">
+                      <p className="text-2xl font-bold font-mono text-amber-300">
+                        {calendarEvents.filter(e => e.category === 'class').length}
+                      </p>
+                      <p className="text-[9px] text-slate-400 uppercase mt-0.5">Class Slots</p>
+                    </div>
                   </div>
-                  <div className="flex gap-3">
-                    <button onClick={handleImportSchedules} className="flex-1 bg-gradient-to-r from-indigo-500 to-pink-500 hover:from-indigo-600 hover:to-pink-600 text-white font-semibold text-xs py-3 px-4 rounded-xl transition-all shadow-md">
-                      Sync Study Blocks to Blocker Schedules
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleImportSchedules}
+                      className="flex-1 bg-gradient-to-r from-indigo-500 to-pink-500 hover:from-indigo-600 hover:to-pink-600 text-white font-semibold text-xs py-2.5 px-4 rounded-xl transition-all"
+                    >
+                      ↓ Push AI Sessions → Blocker
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('planner')}
+                      className="px-4 py-2.5 bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5 font-semibold text-xs rounded-xl transition-all"
+                    >
+                      Edit Planner →
                     </button>
                   </div>
                 </div>
               </div>
 
-              {/* Calendar Timeline display */}
-              <div className="glass rounded-2xl p-6 border-white/5 text-left">
-                <h3 className="text-sm font-bold text-white mb-4">Study Planner Calendar (Next 7 Days)</h3>
-                <div className="flex flex-col gap-2 max-h-[300px] overflow-y-auto pr-2">
-                  {calendarEvents.map((evt, idx) => (
-                    <div key={evt.id || idx} className="flex items-center justify-between p-3 bg-slate-900/50 rounded-xl border border-white/5 text-xs">
-                      <div>
-                        <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded uppercase mr-2 ${
-                          evt.category === 'sleep' ? 'bg-slate-800 text-slate-400' :
-                          evt.category === 'class' ? 'bg-blue-500/10 text-blue-300' :
-                          evt.category === 'study' ? 'bg-indigo-500/10 text-indigo-300' : 'bg-emerald-500/10 text-emerald-300'
-                        }`}>{evt.category || 'Event'}</span>
-                        <strong className="text-slate-100">{evt.title}</strong>
+              {/* 7-Day Dynamic Calendar Grid */}
+              <div className="glass rounded-2xl p-5 border-white/5">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-sm font-bold text-white">This Week's Schedule</h3>
+                  <p className="text-[10px] text-slate-400">Synced from Study Planner + AI calendar events</p>
+                </div>
+
+                {/* Day columns */}
+                <div className="grid grid-cols-7 gap-1.5">
+                  {Array.from({ length: 7 }, (_, dayOffset) => {
+                    const day = new Date();
+                    day.setDate(day.getDate() + dayOffset);
+                    const dayKey = day.toISOString().split('T')[0];
+                    const dayLabel = day.toLocaleDateString('en-US', { weekday: 'short' });
+                    const dateLabel = day.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                    const isToday = dayOffset === 0;
+
+                    // Collect events for this day from calendarEvents
+                    const dayCalEvents = calendarEvents.filter(evt => {
+                      const evtDate = new Date(evt.start).toISOString().split('T')[0];
+                      return evtDate === dayKey;
+                    });
+
+                    // Also derive daily study blocks from schedules (they recur daily by time)
+                    const studyBlocksFromPlanner = schedules.map(s => ({
+                      id: s.id,
+                      title: s.title,
+                      start: s.startTime,
+                      end: s.endTime,
+                      type: 'planner' as const,
+                    }));
+
+                    return (
+                      <div key={dayOffset} className={`flex flex-col gap-1 min-h-[160px] rounded-xl p-2 border ${
+                        isToday ? 'bg-indigo-500/8 border-indigo-500/30' : 'bg-white/3 border-white/5'
+                      }`}>
+                        {/* Day header */}
+                        <div className="text-center mb-1">
+                          <p className={`text-[9px] font-bold uppercase ${isToday ? 'text-indigo-400' : 'text-slate-500'}`}>{dayLabel}</p>
+                          <p className={`text-[10px] font-mono ${isToday ? 'text-white font-bold' : 'text-slate-400'}`}>{dateLabel.split(' ')[1]}</p>
+                        </div>
+
+                        {/* Study planner blocks (recur every day) */}
+                        {studyBlocksFromPlanner.map((block, bi) => (
+                          <div key={`p-${bi}`} className="text-[8px] bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 rounded-md px-1.5 py-1 leading-tight truncate" title={`${block.title} ${block.start}–${block.end}`}>
+                            <span className="font-bold block truncate">{block.title}</span>
+                            <span className="text-indigo-400/70">{block.start}–{block.end}</span>
+                          </div>
+                        ))}
+
+                        {/* Calendar events for this specific day */}
+                        {dayCalEvents.map((evt, ei) => {
+                          const startStr = new Date(evt.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                          const endStr = new Date(evt.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                          const colorClass =
+                            evt.category === 'sleep' ? 'bg-slate-700/40 border-slate-600/30 text-slate-400' :
+                            evt.category === 'class' ? 'bg-amber-500/15 border-amber-500/25 text-amber-300' :
+                            evt.category === 'study' ? 'bg-emerald-500/15 border-emerald-500/25 text-emerald-300' :
+                            evt.category === 'exercise' ? 'bg-pink-500/15 border-pink-500/25 text-pink-300' :
+                            'bg-white/5 border-white/10 text-slate-300';
+                          return (
+                            <div key={`e-${ei}`} className={`text-[8px] border rounded-md px-1.5 py-1 leading-tight truncate ${colorClass}`} title={`${evt.title} ${startStr}–${endStr}`}>
+                              <span className="font-bold block truncate">{evt.title}</span>
+                              <span className="opacity-70">{startStr}–{endStr}</span>
+                            </div>
+                          );
+                        })}
+
+                        {/* Empty day placeholder */}
+                        {studyBlocksFromPlanner.length === 0 && dayCalEvents.length === 0 && (
+                          <div className="flex-1 flex items-center justify-center">
+                            <p className="text-[8px] text-slate-600 text-center">Free</p>
+                          </div>
+                        )}
                       </div>
-                      <div className="text-right font-mono text-[10px] text-slate-400">
-                        {new Date(evt.start).toLocaleString()} - {new Date(evt.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Legend */}
+                <div className="flex flex-wrap gap-3 mt-4 pt-4 border-t border-white/5">
+                  {[
+                    { color: 'bg-indigo-500/20 text-indigo-300', label: 'Study Planner' },
+                    { color: 'bg-emerald-500/20 text-emerald-300', label: 'AI Study Session' },
+                    { color: 'bg-amber-500/20 text-amber-300', label: 'College / Work' },
+                    { color: 'bg-pink-500/20 text-pink-300', label: 'Exercise' },
+                    { color: 'bg-slate-700/40 text-slate-400', label: 'Sleep' },
+                  ].map(({ color, label }) => (
+                    <div key={label} className="flex items-center gap-1.5">
+                      <span className={`w-2.5 h-2.5 rounded-sm ${color}`} />
+                      <span className="text-[9px] text-slate-400">{label}</span>
                     </div>
                   ))}
+                </div>
+              </div>
+
+              {/* Detailed event list */}
+              <div className="glass rounded-2xl p-5 border-white/5">
+                <h3 className="text-sm font-bold text-white mb-3">All Calendar Events (Next 7 Days)</h3>
+                <div className="flex flex-col gap-1.5 max-h-[250px] overflow-y-auto pr-1">
+                  {calendarEvents.length === 0 && schedules.length === 0 ? (
+                    <div className="text-center py-8 text-slate-500 text-xs">
+                      No events yet. Run "AI Auto-Schedule Week" or add sessions in Study Planner.
+                    </div>
+                  ) : (
+                    [...calendarEvents]
+                      .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
+                      .map((evt, idx) => (
+                        <div key={evt.id || idx} className="flex items-center justify-between p-2.5 bg-slate-900/50 rounded-xl border border-white/5 text-xs group">
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                              evt.category === 'sleep' ? 'bg-slate-800 text-slate-400' :
+                              evt.category === 'class' ? 'bg-amber-500/10 text-amber-300' :
+                              evt.category === 'study' ? 'bg-indigo-500/10 text-indigo-300' :
+                              evt.category === 'exercise' ? 'bg-pink-500/10 text-pink-300' : 'bg-emerald-500/10 text-emerald-300'
+                            }`}>{evt.category || 'event'}</span>
+                            <strong className="text-slate-100">{evt.title}</strong>
+                          </div>
+                          <div className="text-right font-mono text-[9px] text-slate-400">
+                            {new Date(evt.start).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                            {' '}{new Date(evt.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            {' – '}{new Date(evt.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                        </div>
+                      ))
+                  )}
                 </div>
               </div>
             </div>
