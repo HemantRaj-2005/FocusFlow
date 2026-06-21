@@ -15,6 +15,15 @@ export function timeToMinutes(timeStr: string): number {
  */
 export function isTaskActiveNow(task: Schedule): boolean {
   const now = new Date();
+
+  // If daysOfWeek is defined, check if today is included
+  if (task.daysOfWeek && task.daysOfWeek.length > 0) {
+    const currentDay = now.getDay(); // 0=Sunday, 1=Monday, etc.
+    if (!task.daysOfWeek.includes(currentDay)) {
+      return false;
+    }
+  }
+
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
   
   const start = timeToMinutes(task.startTime);
@@ -27,6 +36,7 @@ export function isTaskActiveNow(task: Schedule): boolean {
     return currentMinutes >= start || currentMinutes < end;
   }
 }
+
 
 /**
  * Finds the currently active schedule from the list.

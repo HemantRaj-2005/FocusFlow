@@ -8,7 +8,9 @@ export interface Schedule {
   allowedDomains: string[];
   strictMode: boolean;
   warningThreshold: number; // 0 to 100
+  daysOfWeek?: number[]; // Days of the week this schedule is active (0=Sun, 1=Mon, etc.)
 }
+
 
 export interface FocusScoreEntry {
   date: string; // YYYY-MM-DD
@@ -84,6 +86,7 @@ export interface CPProfiles {
       weak: string[];
       needsImprovement: string[];
     };
+    solvedProblemKeys?: string[];
   } | null;
   leetcode: {
     problemsSolved: {
@@ -104,6 +107,7 @@ export interface CPProfiles {
     }[];
     strengths: string[];
     weaknesses: string[];
+    solvedProblemKeys?: string[];
   } | null;
   atcoder: {
     rating: number;
@@ -118,6 +122,7 @@ export interface CPProfiles {
     growthOpportunities: string[];
     rank?: string;
     contestCount?: number;
+    solvedProblemKeys?: string[];
   } | null;
 }
 

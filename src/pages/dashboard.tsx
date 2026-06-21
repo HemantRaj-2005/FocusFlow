@@ -85,7 +85,9 @@ export default function Dashboard() {
     allowedDomains: '',
     strictMode: false,
     warningThreshold: 50,
+    daysOfWeek: [] as number[],
   });
+
 
   // Password Verification Modal
   const [showPasswordModal, setShowPasswordModal] = useState<boolean>(false);
@@ -380,6 +382,7 @@ export default function Dashboard() {
       allowedDomains: schedule.allowedDomains.join(', '),
       strictMode: schedule.strictMode,
       warningThreshold: schedule.warningThreshold,
+      daysOfWeek: schedule.daysOfWeek || [],
     });
     setShowScheduleModal(true);
   };
@@ -445,6 +448,7 @@ export default function Dashboard() {
             allowedDomains: domains,
             strictMode: scheduleForm.strictMode,
             warningThreshold: scheduleForm.warningThreshold,
+            daysOfWeek: scheduleForm.daysOfWeek,
           };
         }
         return s;
@@ -462,6 +466,7 @@ export default function Dashboard() {
         allowedDomains: domains,
         strictMode: scheduleForm.strictMode,
         warningThreshold: scheduleForm.warningThreshold,
+        daysOfWeek: scheduleForm.daysOfWeek,
       };
       const updated = [...schedules, newSchedule];
       setSchedules(updated);
@@ -585,6 +590,7 @@ export default function Dashboard() {
           weak: ['Dynamic Programming', 'Graphs'],
           needsImprovement: ['Constructive Algorithms'],
         },
+        solvedProblemKeys: cpProfiles.codeforces?.solvedProblemKeys || [],
       },
       leetcode: {
         problemsSolved: { easy: lcEasy, medium: lcMed, hard: lcHard, total: lcTotal },
@@ -603,6 +609,7 @@ export default function Dashboard() {
         ],
         strengths: cpProfiles.leetcode?.strengths || ['Arrays', 'Strings'],
         weaknesses: cpProfiles.leetcode?.weaknesses || ['Dynamic Programming', 'Graphs'],
+        solvedProblemKeys: cpProfiles.leetcode?.solvedProblemKeys || [],
       },
       atcoder: {
         rating: acRating,
@@ -617,6 +624,7 @@ export default function Dashboard() {
         beginnerAreas: cpProfiles.atcoder?.beginnerAreas || ['Implementation'],
         advancedAreas: cpProfiles.atcoder?.advancedAreas || [],
         growthOpportunities: cpProfiles.atcoder?.growthOpportunities || ['Dynamic Programming'],
+        solvedProblemKeys: cpProfiles.atcoder?.solvedProblemKeys || [],
       },
     };
 
@@ -688,7 +696,11 @@ export default function Dashboard() {
       alert('No study sessions found in your planner calendar. Please run the AI planner first.');
       return;
     }
-    const merged = [...schedules, ...studySchedules.filter(ns => !schedules.some(s => s.title === ns.title))];
+    // Remove any previously imported AI schedules to avoid overlaps
+    const nonAiSchedules = schedules.filter(
+      s => !s.id.startsWith('study-') && !s.description.includes('synchronized from AI Smart Planner')
+    );
+    const merged = [...nonAiSchedules, ...studySchedules];
     setSchedules(merged);
     await saveAppState({ schedules: merged });
     alert(`Successfully synced ${studySchedules.length} study sessions directly to your study blocker schedule!`);
@@ -1846,7 +1858,9 @@ export default function Dashboard() {
                         allowedDomains: '',
                         strictMode: false,
                         warningThreshold: 50,
+                        daysOfWeek: [],
                       });
+
                       setShowScheduleModal(true);
                     }}
                     className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs py-2 px-4 rounded-xl flex items-center gap-1.5 shadow-md shadow-indigo-600/10 transition-all active:scale-[0.98]"
@@ -1906,6 +1920,16 @@ export default function Dashboard() {
                             <span className="font-mono text-slate-300 font-medium">
                               {formatTimeSlot(schedule.startTime, schedule.endTime)}
                             </span>
+                            <span className="h-1.5 w-1.5 rounded-full bg-slate-700 hidden md:inline" />
+                            {schedule.daysOfWeek && schedule.daysOfWeek.length > 0 ? (
+                              <span className="text-[10px] bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-lg font-semibold">
+                                {schedule.daysOfWeek.map(d => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]).join(', ')}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-lg font-semibold">
+                                Daily
+                              </span>
+                            )}
                             <span className="h-1.5 w-1.5 rounded-full bg-slate-700 hidden md:inline" />
                             <span className="flex items-center gap-1">
                               Target URL:
@@ -2092,14 +2116,20 @@ export default function Dashboard() {
                       return evtDate === dayKey;
                     });
 
-                    // Also derive daily study blocks from schedules (they recur daily by time)
-                    const studyBlocksFromPlanner = schedules.map(s => ({
-                      id: s.id,
-                      title: s.title,
-                      start: s.startTime,
-                      end: s.endTime,
-                      type: 'planner' as const,
-                    }));
+                    // Also derive daily study blocks from schedules (respecting daysOfWeek)
+                    const studyBlocksFromPlanner = schedules
+                      .filter(s => {
+                        if (!s.daysOfWeek || s.daysOfWeek.length === 0) return true;
+                        return s.daysOfWeek.includes(day.getDay());
+                      })
+                      .map(s => ({
+                        id: s.id,
+                        title: s.title,
+                        start: s.startTime,
+                        end: s.endTime,
+                        type: 'planner' as const,
+                      }));
+
 
                     return (
                       <div key={dayOffset} className={`flex flex-col gap-1 min-h-[160px] rounded-xl p-2 border ${
@@ -2474,6 +2504,44 @@ export default function Dashboard() {
                   />
                 </div>
               </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-bold text-slate-300">Days of the Week</label>
+                <div className="flex gap-1 justify-between bg-slate-950 p-2 rounded-xl border border-white/15">
+                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((dayName, idx) => {
+                    const isSelected = scheduleForm.daysOfWeek.includes(idx);
+                    return (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => {
+                          const currentDays = [...scheduleForm.daysOfWeek];
+                          if (isSelected) {
+                            setScheduleForm({
+                              ...scheduleForm,
+                              daysOfWeek: currentDays.filter(d => d !== idx)
+                            });
+                          } else {
+                            setScheduleForm({
+                              ...scheduleForm,
+                              daysOfWeek: [...currentDays, idx]
+                            });
+                          }
+                        }}
+                        className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg border transition-all ${
+                          isSelected
+                            ? 'bg-indigo-600 border-indigo-500 text-white font-extrabold shadow-md shadow-indigo-600/20'
+                            : 'bg-transparent border-transparent text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        {dayName[0]}
+                      </button>
+                    );
+                  })}
+                </div>
+                <span className="text-[9px] text-slate-500">Leave unselected to apply to all days (Daily).</span>
+              </div>
+
 
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-bold text-slate-300">Target Study Resource URL</label>

@@ -230,7 +230,8 @@ export async function syncCodeforces(handle: string): Promise<any> {
         strong: strong.map(s => s.charAt(0).toUpperCase() + s.slice(1)),
         weak: weak.map(s => s.charAt(0).toUpperCase() + s.slice(1)),
         needsImprovement: needsImprovement.map(s => s.charAt(0).toUpperCase() + s.slice(1)),
-      }
+      },
+      solvedProblemKeys: Array.from(solvedSet)
     };
   } catch (error) {
     console.warn(`Codeforces API Sync failed for ${handle}. Using simulated high-fidelity profile.`, error);
@@ -243,6 +244,20 @@ export async function syncCodeforces(handle: string): Promise<any> {
  */
 export async function syncLeetCode(username: string): Promise<any> {
   if (!username) return null;
+
+  let solvedSlugs: string[] = [];
+  try {
+    const acRes = await fetch(`https://alfa-leetcode-api.onrender.com/${username}/acSubmission`);
+    if (acRes.ok) {
+      const acData = await acRes.json();
+      if (acData && Array.isArray(acData.submission)) {
+        solvedSlugs = Array.from(new Set(acData.submission.map((s: any) => s.titleSlug || s.title)));
+      }
+    }
+  } catch (e) {
+    console.warn('Alfa Leetcode AC submission fetch failed:', e);
+  }
+
   try {
     // Try primary Vercal endpoint first
     const res = await fetch(`https://leetcode-api-faisalshohag.vercel.app/${username}`);
@@ -273,6 +288,7 @@ export async function syncLeetCode(username: string): Promise<any> {
       ],
       strengths: ['Arrays', 'Strings'],
       weaknesses: ['Dynamic Programming', 'Graphs'],
+      solvedProblemKeys: solvedSlugs,
     };
   } catch (error) {
     // try fallback on Alfa-Leetcode-API (correct endpoint has no profiles/ in path)
@@ -303,6 +319,7 @@ export async function syncLeetCode(username: string): Promise<any> {
         ],
         strengths: ['Arrays', 'Strings'],
         weaknesses: ['Dynamic Programming', 'Graphs'],
+        solvedProblemKeys: solvedSlugs,
       };
     } catch (e) {
       console.warn('All LC sync failed, using mock generator:', e);
@@ -347,6 +364,13 @@ export async function syncAtCoder(username: string): Promise<any> {
       console.warn('AtCoder submissions fetch failed:', e);
     }
 
+    const solvedSet = new Set<string>();
+    submissionHistory.forEach(s => {
+      if (s.result === 'AC') {
+        solvedSet.add(s.problem_id);
+      }
+    });
+
     return {
       rating,
       contestPerformance: contestHistory.map((c: any) => ({
@@ -369,6 +393,7 @@ export async function syncAtCoder(username: string): Promise<any> {
       growthOpportunities: ['Dynamic Programming', 'Graph Theory'],
       rank,
       contestCount,
+      solvedProblemKeys: Array.from(solvedSet),
     };
   } catch (error) {
     console.warn(`AtCoder Sync failed for ${username}. Using simulated profile.`, error);
@@ -567,12 +592,13 @@ export async function generateCPCoachReport(
     3. weakTopics: Top 3 technical weaknesses.
     4. ratingPotential: Forecast, e.g., '1400 -> 1650 in 3 months'.
     5. roadmap: Month-by-month study modules for the next 4 months.
-    6. recommendations: 4-6 specific coding problems they should solve now from Codeforces/Leetcode/Atcoder, containing real platform urls and tags. Avoid recommending problems they have already solved in submissions!
+    6. recommendations: 4-6 specific coding problems they should solve now from Codeforces/Leetcode/Atcoder, containing real platform urls and tags. You MUST NOT recommend any problem whose ID/key or slug is listed in the user's solvedProblemKeys arrays! Every recommended problem must be unsolved.
     7. dailyPractice: A Daily Practice Sheet for today, with:
        - warmup: 2 easy problems (e.g. CF 1234A, LC Easy)
        - core: 3 medium problems (e.g. CF 1900, LC Medium)
        - challenge: 1 hard problem (e.g. CF 2100, LC Hard)
        - revision: 1 review problem based on their weak topics
+       ALL of these daily practice problems MUST also be unsolved by the user (not present in solvedProblemKeys)!
     8. predictedGrowth: List of 5 data points representing growth over the next 120 days.
     9. predictedConfidence: Percentage confidence (e.g., 78).
 
@@ -637,6 +663,78 @@ function generateMockCoachReport(profiles: CPProfiles, goal: CPGoal): CoachRepor
   const strong = ['Implementation', 'Greedy', 'Math'];
   const weak = ['Dynamic Programming', 'Graphs', 'Trees'];
 
+  // Collect user's solved keys to filter them out
+  const solvedKeys = new Set<string>();
+  if (profiles.codeforces?.solvedProblemKeys) {
+    profiles.codeforces.solvedProblemKeys.forEach(k => solvedKeys.add(k.toLowerCase()));
+  }
+  if (profiles.leetcode?.solvedProblemKeys) {
+    profiles.leetcode.solvedProblemKeys.forEach(k => solvedKeys.add(k.toLowerCase()));
+  }
+  if (profiles.atcoder?.solvedProblemKeys) {
+    profiles.atcoder.solvedProblemKeys.forEach(k => solvedKeys.add(k.toLowerCase()));
+  }
+
+  const isSolved = (item: { problemId: string; name: string; url: string }) => {
+    const id = item.problemId.toLowerCase();
+    const name = item.name.toLowerCase();
+    const slug = item.url.split('/problems/')[1]?.split('/')[0] || '';
+    return solvedKeys.has(id) || solvedKeys.has(name) || (slug && solvedKeys.has(slug.toLowerCase()));
+  };
+
+  const allMockRecs = [
+    { id: 'rec-1', platform: 'codeforces' as const, problemId: '1850H', name: 'The Third Letter', difficulty: '1400', url: 'https://codeforces.com/problemset/problem/1850/H', tags: ['graphs', 'dfs'], solved: false },
+    { id: 'rec-2', platform: 'leetcode' as const, problemId: '124', name: 'Binary Tree Maximum Path Sum', difficulty: 'Hard', url: 'https://leetcode.com/problems/binary-tree-maximum-path-sum/', tags: ['trees', 'dfs'], solved: false },
+    { id: 'rec-3', platform: 'codeforces' as const, problemId: '1899F', name: 'Alex\'s Whims', difficulty: '1500', url: 'https://codeforces.com/problemset/problem/1899/F', tags: ['graphs', 'trees'], solved: false },
+    { id: 'rec-4', platform: 'leetcode' as const, problemId: '300', name: 'Longest Increasing Subsequence', difficulty: 'Medium', url: 'https://leetcode.com/problems/longest-increasing-subsequence/', tags: ['dp', 'binary search'], solved: false },
+    { id: 'rec-5', platform: 'atcoder' as const, problemId: 'abc340_d', name: 'Super Takahashi Bros.', difficulty: 'Brown', url: 'https://atcoder.jp/contests/abc340/tasks/abc340_d', tags: ['graphs', 'dijkstra'], solved: false },
+    { id: 'rec-6', platform: 'codeforces' as const, problemId: '1985D', name: 'Manhattan Circle', difficulty: '800', url: 'https://codeforces.com/problemset/problem/1985/D', tags: ['implementation'], solved: false },
+    { id: 'rec-7', platform: 'leetcode' as const, problemId: '53', name: 'Maximum Subarray', difficulty: 'Medium', url: 'https://leetcode.com/problems/maximum-subarray/', tags: ['arrays', 'dp'], solved: false },
+    { id: 'rec-8', platform: 'codeforces' as const, problemId: '1985E', name: 'Secret Box', difficulty: '1100', url: 'https://codeforces.com/problemset/problem/1985/E', tags: ['math', 'brute force'], solved: false },
+    { id: 'rec-9', platform: 'leetcode' as const, problemId: '198', name: 'House Robber', difficulty: 'Medium', url: 'https://leetcode.com/problems/house-robber/', tags: ['dp'], solved: false },
+    { id: 'rec-10', platform: 'atcoder' as const, problemId: 'abc350_c', name: 'Sort', difficulty: 'Grey', url: 'https://atcoder.jp/contests/abc350/tasks/abc350_c', tags: ['sorting'], solved: false },
+    { id: 'rec-11', platform: 'codeforces' as const, problemId: '1900C', name: 'Anji\'s Binary Tree', difficulty: '1300', url: 'https://codeforces.com/problemset/problem/1900/C', tags: ['trees', 'dfs'], solved: false },
+    { id: 'rec-12', platform: 'leetcode' as const, problemId: '200', name: 'Number of Islands', difficulty: 'Medium', url: 'https://leetcode.com/problems/number-of-islands/', tags: ['graphs', 'dfs'], solved: false },
+  ];
+
+  const recommendations = allMockRecs.filter(r => !isSolved(r)).slice(0, 5);
+
+  const warmupPool = [
+    { id: 'dp-wu-1', name: 'CF 1985A - Creating Words', url: 'https://codeforces.com/problemset/problem/1985/A', solved: false, problemId: '1985A' },
+    { id: 'dp-wu-2', name: 'LeetCode 1 - Two Sum', url: 'https://leetcode.com/problems/two-sum/', solved: false, problemId: '1' },
+    { id: 'dp-wu-3', name: 'CF 1985B - Maximum Multiple Sum', url: 'https://codeforces.com/problemset/problem/1985/B', solved: false, problemId: '1985B' },
+    { id: 'dp-wu-4', name: 'LeetCode 9 - Palindrome Number', url: 'https://leetcode.com/problems/palindrome-number/', solved: false, problemId: '9' },
+  ];
+
+  const corePool = [
+    { id: 'dp-c-1', name: 'CF 1985C - Good Prefixes', url: 'https://codeforces.com/problemset/problem/1985/C', solved: false, problemId: '1985C' },
+    { id: 'dp-c-2', name: 'LeetCode 102 - Binary Tree Level Order', url: 'https://leetcode.com/problems/binary-tree-level-order-traversal/', solved: false, problemId: '102' },
+    { id: 'dp-c-3', name: 'AtCoder abc351_c - Merge Balls', url: 'https://atcoder.jp/contests/abc351/tasks/abc351_c', solved: false, problemId: 'abc351_c' },
+    { id: 'dp-c-4', name: 'CF 1850D - Balanced Round', url: 'https://codeforces.com/problemset/problem/1850/D', solved: false, problemId: '1850D' },
+    { id: 'dp-c-5', name: 'LeetCode 11 - Container With Most Water', url: 'https://leetcode.com/problems/container-with-most-water/', solved: false, problemId: '11' },
+  ];
+
+  const challengePool = [
+    { id: 'dp-ch-1', name: 'CF 1900D - Graph Connectivity', url: 'https://codeforces.com/problemset/problem/1900/D', solved: false, problemId: '1900D' },
+    { id: 'dp-ch-2', name: 'LeetCode 124 - Binary Tree Maximum Path Sum', url: 'https://leetcode.com/problems/binary-tree-maximum-path-sum/', solved: false, problemId: '124' },
+    { id: 'dp-ch-3', name: 'LeetCode 72 - Edit Distance', url: 'https://leetcode.com/problems/edit-distance/', solved: false, problemId: '72' },
+  ];
+
+  const revisionPool = [
+    { id: 'dp-r-1', name: 'LeetCode 322 - Coin Change (DP)', url: 'https://leetcode.com/problems/coin-change/', solved: false, problemId: '322' },
+    { id: 'dp-r-2', name: 'LeetCode 207 - Course Schedule', url: 'https://leetcode.com/problems/course-schedule/', solved: false, problemId: '207' },
+    { id: 'dp-r-3', name: 'CF 1899E - Queue Sort', url: 'https://codeforces.com/problemset/problem/1899/E', solved: false, problemId: '1899E' },
+  ];
+
+  const warmup = warmupPool.filter(w => !isSolved(w)).slice(0, 2);
+  const core = corePool.filter(c => !isSolved(c)).slice(0, 3);
+  
+  const selectedChallenge = challengePool.filter(ch => !isSolved(ch))[0] || challengePool[0];
+  const challenge = { id: selectedChallenge.id, name: selectedChallenge.name, url: selectedChallenge.url, solved: false };
+
+  const selectedRevision = revisionPool.filter(r => !isSolved(r))[0] || revisionPool[0];
+  const revision = { id: selectedRevision.id, name: selectedRevision.name, url: selectedRevision.url, solved: false };
+
   return {
     currentLevel: currentRating >= 1600 ? 'Expert Solver' : currentRating >= 1400 ? 'Specialist' : 'Pupil',
     strongTopics: strong,
@@ -648,26 +746,13 @@ function generateMockCoachReport(profiles: CPProfiles, goal: CPGoal): CoachRepor
       { id: 'm3', month: 'Month 3: Dynamic Programming', topics: ['DP Foundations', 'Interval DP', 'Knapsack'], description: 'Develop recursive intuition and iterative tabulations.', completed: false },
       { id: 'm4', month: 'Month 4: Mastery & Upsolving', topics: ['Constructive Algos', 'Bitmask DP'], description: 'Practice live contest configurations and advanced problem types.', completed: false },
     ],
-    recommendations: [
-      { id: 'rec-1', platform: 'codeforces', problemId: '1850H', name: 'The Third Letter', difficulty: '1400', url: 'https://codeforces.com/problemset/problem/1850/H', tags: ['graphs', 'dfs'], solved: false },
-      { id: 'rec-2', platform: 'leetcode', problemId: '124', name: 'Binary Tree Maximum Path Sum', difficulty: 'Hard', url: 'https://leetcode.com/problems/binary-tree-maximum-path-sum/', tags: ['trees', 'dfs'], solved: false },
-      { id: 'rec-3', platform: 'codeforces', problemId: '1899F', name: 'Alex\'s Whims', difficulty: '1500', url: 'https://codeforces.com/problemset/problem/1899/F', tags: ['graphs', 'trees'], solved: false },
-      { id: 'rec-4', platform: 'leetcode', problemId: '300', name: 'Longest Increasing Subsequence', difficulty: 'Medium', url: 'https://leetcode.com/problems/longest-increasing-subsequence/', tags: ['dp', 'binary search'], solved: false },
-      { id: 'rec-5', platform: 'atcoder', problemId: 'abc340_d', name: 'Super Takahashi Bros.', difficulty: 'Brown', url: 'https://atcoder.jp/contests/abc340/tasks/abc340_d', tags: ['graphs', 'dijkstra'], solved: false },
-    ],
+    recommendations,
     dailyPractice: {
       date: '2026-06-22',
-      warmup: [
-        { id: 'dp-wu-1', name: 'CF 1985A - Creating Words', url: 'https://codeforces.com/problemset/problem/1985/A', solved: false },
-        { id: 'dp-wu-2', name: 'LeetCode 1 - Two Sum', url: 'https://leetcode.com/problems/two-sum/', solved: false },
-      ],
-      core: [
-        { id: 'dp-c-1', name: 'CF 1985C - Good Prefixes', url: 'https://codeforces.com/problemset/problem/1985/C', solved: false },
-        { id: 'dp-c-2', name: 'LeetCode 102 - Binary Tree Level Order', url: 'https://leetcode.com/problems/binary-tree-level-order-traversal/', solved: false },
-        { id: 'dp-c-3', name: 'AtCoder abc351_c - Merge Balls', url: 'https://atcoder.jp/contests/abc351/tasks/abc351_c', solved: false },
-      ],
-      challenge: { id: 'dp-ch-1', name: 'CF 1900 - Graph Connectivity', url: 'https://codeforces.com/problemset/problem/1900/D', solved: false },
-      revision: { id: 'dp-r-1', name: 'LeetCode 322 - Coin Change (DP)', url: 'https://leetcode.com/problems/coin-change/', solved: false },
+      warmup: warmup.map(w => ({ id: w.id, name: w.name, url: w.url, solved: false })),
+      core: core.map(c => ({ id: c.id, name: c.name, url: c.url, solved: false })),
+      challenge,
+      revision,
     },
     predictedGrowth: [
       { days: 0, rating: currentRating },
@@ -723,6 +808,7 @@ STRICT RULES:
 5. Generate 8-12 study sessions across the 7 days.
 6. Title format for study sessions: "Study: <Topic> — <duration, e.g. 1.5h>"
 7. Title format for other events: "Sleep & Rest", "College Lectures" (or Work), "Workout & Jogging" (or Exercise).
+8. ENSURE study sessions do not overlap with each other or with other activities. There must be no overlapping events in the output JSON.
 
 Output EXACTLY a JSON array of calendar event objects matching this schema:
 [
@@ -1074,6 +1160,7 @@ export function convertCalendarEventsToSchedules(events: CalendarEvent[]): Sched
       allowedDomains: allowed.split(',').map(d => d.trim().toLowerCase()),
       strictMode: false,
       warningThreshold: 50,
+      daysOfWeek: [start.getDay()],
     };
   });
 }
